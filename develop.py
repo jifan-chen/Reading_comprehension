@@ -11,7 +11,6 @@ from sklearn.metrics import accuracy_score
 from utils import *
 from preprocessing import *
 
-
 class Trainer(nn.Module):
     def __init__(self, vocab_size, embedding_size, ini_weight, hidden_dim, bidirection = False, option_number=4):
         super(Trainer, self).__init__()
@@ -42,12 +41,17 @@ class Trainer(nn.Module):
         qst_ht = torch.unsqueeze(qst_ht,1)
 
         qstopt_ht = opt_ht + qst_ht
+        #qstopt_ht = opt_ht
+
+        #qst_ht = qst_ht.repeat(1,4,1)
+        #qstopt_ht = torch.cat((opt_ht,qst_ht),dim=2)
 
         p2qa_align = self.p2qa_attention(encoded_passage,qstopt_ht)
 
-        #msk_p = torch.squeeze(msk_p)
-        #msk_p = torch.unsqueeze(msk_p,1)
+        msk_p = torch.squeeze(msk_p)
+        msk_p = torch.unsqueeze(msk_p,1)
         #p2qa_align = p2qa_align * msk_p
+
         #print p2qa_align.sum(dim=2)
         #print encoded_passage
         p_expectation = torch.bmm(p2qa_align, encoded_passage)
@@ -101,7 +105,8 @@ if __name__ == '__main__':
     hidden_size = 128
     pre_embedding = load_pretrained_embedding('RACE/glove.6B/glove.6B.100d.txt')
     init_embedding = init_embedding_matrix(vocab,pre_embedding,embedding_size)
-    trainer = Trainer(vocab_size=vocab_len,embedding_size=embedding_size,ini_weight=init_embedding,hidden_dim=hidden_size,bidirection=False)
+    init_embedding = torch.FloatTensor(init_embedding)
+    trainer = Trainer(vocab_size=vocab_len,embedding_size=embedding_size,ini_weight=init_embedding,hidden_dim=hidden_size,bidirection=True)
     params = trainer.parameters()
 
     loss_function = nn.CrossEntropyLoss()
@@ -115,7 +120,7 @@ if __name__ == '__main__':
         trainer.train()
         train_loss = 0
         sample_count = 0
-        for it,(mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3, mb_mask3, mb_lst3,mb_y) in enumerate(all_train):
+        for it,(mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3, mb_mask3, mb_lst3,mb_y) in enumerate(all_test):
             article = Variable(torch.LongTensor(mb_x1))
             mask_a = Variable(torch.FloatTensor(mb_mask1))
             lst_a = Variable(torch.LongTensor(mb_lst1))

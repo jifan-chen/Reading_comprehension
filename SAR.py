@@ -87,10 +87,11 @@ if __name__ == '__main__':
     test_data = load_data('RACE/data/test/middle/')
 
     train_x1, train_x2, train_x3, train_x4, train_y = convert2index(train_data, vocab, sort_by_len=False)
-    dve_x1, dev_x2, dev_x3, dev_x4, dev_y = convert2index(dev_data, vocab, sort_by_len=False)
+    dev_x1, dev_x2, dev_x3, dev_x4, dev_y = convert2index(dev_data, vocab, sort_by_len=False)
     test_x1, test_x2, test_x3, test_x4, test_y = convert2index(test_data, vocab, sort_by_len=False)
     all_train = gen_examples(train_x1, train_x2, train_x3, train_x4, train_y, 32)
-    all_test = gen_examples(test_x1, test_x2, test_x3, test_x4, test_y,32)
+    #all_test = gen_examples(test_x1, test_x2, test_x3, test_x4, test_y,32)
+    all_dev = gen_examples(dev_x1, dev_x2, dev_x3, dev_x4, dev_y, 32)
 
     print '-'*20,'Done','-'*20
 
@@ -98,7 +99,7 @@ if __name__ == '__main__':
     hidden_size = 128
     pre_embedding = load_pretrained_embedding('RACE/glove.6B/glove.6B.100d.txt')
     init_embedding = init_embedding_matrix(vocab,pre_embedding,embedding_size)
-    trainer = Trainer(vocab_size=vocab_len,embedding_size=embedding_size,ini_weight=init_embedding,hidden_dim=hidden_size,bidirection=True)
+    trainer = Trainer(vocab_size=vocab_len,embedding_size=embedding_size,ini_weight=init_embedding,hidden_dim=hidden_size,bidirection=False)
     params = trainer.parameters()
 
     loss_function = nn.CrossEntropyLoss()
@@ -154,7 +155,7 @@ if __name__ == '__main__':
         predicts = []
         gold = []
         sample_count = 0
-        for it, (mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3, mb_mask3, mb_lst3, mb_y) in enumerate(all_test):
+        for it, (mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3, mb_mask3, mb_lst3, mb_y) in enumerate(all_dev):
             article = Variable(torch.LongTensor(mb_x1))
             mask_a = Variable(torch.FloatTensor(mb_mask1))
             lst_a = Variable(torch.LongTensor(mb_lst1))

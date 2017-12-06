@@ -1,5 +1,6 @@
 import numpy as np
 import operator
+
 import torch
 
 def load_pretrained_embedding(emb_url):
@@ -27,7 +28,7 @@ def init_embedding_matrix(vocab,pretrained_embedding,emb_size):
             #print sorted_vocab[i-1][0]
             pass
     print count
-    return torch.FloatTensor(init_embedding_matrix)
+    return init_embedding_matrix
 
 if __name__ == '__main__':
     emb = load_pretrained_embedding('RACE/glove.6B/glove.6B.50d.txt')
