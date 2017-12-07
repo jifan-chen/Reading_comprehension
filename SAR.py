@@ -1,4 +1,5 @@
 import torch
+import time
 from torch import nn, optim
 from torch.autograd import Variable
 import attention_layer
@@ -99,7 +100,7 @@ if __name__ == '__main__':
     hidden_size = 128
     pre_embedding = load_pretrained_embedding('RACE/glove.6B/glove.6B.100d.txt')
     init_embedding = init_embedding_matrix(vocab,pre_embedding,embedding_size)
-    trainer = Trainer(vocab_size=vocab_len,embedding_size=embedding_size,ini_weight=init_embedding,hidden_dim=hidden_size,bidirection=False)
+    trainer = Trainer(vocab_size=vocab_len,embedding_size=embedding_size,ini_weight=torch.FloatTensor(init_embedding),hidden_dim=hidden_size,bidirection=False)
     params = trainer.parameters()
 
     loss_function = nn.CrossEntropyLoss()
@@ -113,6 +114,8 @@ if __name__ == '__main__':
         trainer.train()
         sample_count = 0
         train_loss = 0
+        start_time = time.time()
+
         for it,(mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3, mb_mask3, mb_lst3, mb_y) in enumerate(all_train):
             article = Variable(torch.LongTensor(mb_x1))
             mask_a = Variable(torch.FloatTensor(mb_mask1))
@@ -143,9 +146,12 @@ if __name__ == '__main__':
             gold += list(y.data.numpy())
 
             if it % 100 == 0:
-                print '*****Epoch:'+ str(epoch) + '*****iteration:' + str(it) + '*****loss:' +str(train_loss/sample_count)
+                end_time = time.time()
+                elapsed = end_time - start_time
+                print '*****Epoch:'+ str(epoch) + '*****iteration:' + str(it) + '*****loss:' +str(train_loss/sample_count), 'Elapsed time:', round(elapsed,4)
                 train_loss = 0
                 sample_count = 0
+                start_time = time.time()
         print accuracy_score(gold, predicts)
         # *********** test *************
         print "*****************testing***********************"

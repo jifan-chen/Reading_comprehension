@@ -1,5 +1,6 @@
 import tensorflow as tf
 import AttentionLayer_tf
+import time
 from Encoder_tf import RNN_encoder
 import logging
 import utils
@@ -96,7 +97,7 @@ if __name__ == '__main__':
     init_embedding = init_embedding_matrix(vocab, pre_embedding, embedding_size)
 
     trainer = Trainer(vocab_size=vocab_len, embedding_size=embedding_size, ini_weight=init_embedding,
-                      hidden_dim=hidden_size, bidirection=False)
+                      hidden_dim=hidden_size, bidirection=True)
 
     article = tf.placeholder(tf.int32, (None, None))
     msk_a = tf.placeholder(tf.float32, (None, None, 1))
@@ -170,7 +171,7 @@ if __name__ == '__main__':
         for epoch in range(num_epoch):
             step_idx = 0
             loss_acc = 0
-
+            start_time = time.time()
             for it, (mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3,
                      mb_mask3, mb_lst3, mb_y) in enumerate(all_train):
 
@@ -184,7 +185,10 @@ if __name__ == '__main__':
                 step_idx += 1
                 loss_acc += loss_this_batch
                 if it % 100 == 0:
-                    print '-'*10, 'Epoch ',epoch, '-'*10, "Average Loss batch " + repr(it) + ": " + repr(loss_acc / step_idx)
+                    end_time = time.time()
+                    elapsed = end_time - start_time
+                    print '-'*10, 'Epoch ',epoch, '-'*10, "Average Loss batch " + repr(it) + ":", round(loss_acc / step_idx,3), 'Elapsed time:', round(elapsed,2)
+                    start_time = time.time()
                     step_idx = 0
                     loss_acc = 0
 
@@ -208,4 +212,4 @@ if __name__ == '__main__':
                 loss_acc += loss_this_batch
 
             print '-' * 10, 'Test Loss ', '-' * 10, repr(loss_acc / step_idx)
-            print 'Test Accuracy:',accuracy_score(gold, predicts)
+            print '-' * 10, 'Test Accuracy:', '-' * 10, accuracy_score(gold, predicts)
