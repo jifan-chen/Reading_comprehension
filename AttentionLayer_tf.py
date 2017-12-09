@@ -3,8 +3,8 @@ from tensorflow.contrib import rnn
 
 class BilinearAttentionO2P():
 
-    def __init__(self,dim):
-        self.W = tf.get_variable("W_o2p", [dim, dim],initializer=tf.contrib.layers.xavier_initializer())
+    def __init__(self,dim,vname):
+        self.W = tf.get_variable(vname, [dim, dim],initializer=tf.contrib.layers.xavier_initializer())
         self.dim = dim
 
     def score(self,source,target):
@@ -21,8 +21,8 @@ class BilinearAttentionO2P():
 
 class BilinearAttentionP2Q():
 
-    def __init__(self,dim):
-        self.W = tf.get_variable("W_p2q", [dim, dim], initializer=tf.contrib.layers.xavier_initializer())
+    def __init__(self,dim,vname):
+        self.W = tf.get_variable(vname, [dim, dim], initializer=tf.contrib.layers.xavier_initializer())
         self.dim = dim
 
     def score(self,source,target):
@@ -41,8 +41,8 @@ class BilinearAttentionP2Q():
 
 class BilinearAttentionP2QA():
 
-    def __init__(self,dim):
-        self.W = tf.get_variable("W_p2qa", [dim, dim], initializer=tf.contrib.layers.xavier_initializer())
+    def __init__(self,dim,vname):
+        self.W = tf.get_variable(vname, [dim, dim], initializer=tf.contrib.layers.xavier_initializer())
         self.dim = dim
 
     def score(self,source,target):
@@ -62,8 +62,8 @@ class BilinearAttentionP2QA():
 
 class DotProductAttention():
 
-    def __init__(self,dim):
-        self.W = tf.get_variable("W_dotprod", [dim, 1], initializer=tf.contrib.layers.xavier_initializer())
+    def __init__(self,dim,vname):
+        self.W = tf.get_variable(vname, [dim, 1], initializer=tf.contrib.layers.xavier_initializer())
         self.dim = dim
 
     def score(self,source):

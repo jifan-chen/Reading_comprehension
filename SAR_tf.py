@@ -19,8 +19,8 @@ class Trainer():
         self.embedding_layer = tf.get_variable("embedding", [vocab_size + 1, embedding_size], trainable=True,
                                                initializer=tf.constant_initializer(ini_weight))
         self.weight_mtx_dim = hidden_dim * 2 if bidirection else hidden_dim
-        self.p2q_attention = AttentionLayer_tf.BilinearAttentionP2Q(self.weight_mtx_dim)
-        self.o2p_attention = AttentionLayer_tf.BilinearAttentionO2P(self.weight_mtx_dim)
+        self.p2q_attention = AttentionLayer_tf.BilinearAttentionP2Q(self.weight_mtx_dim,'W_p2q')
+        self.o2p_attention = AttentionLayer_tf.BilinearAttentionO2P(self.weight_mtx_dim,'W_o2p')
         self.passage_encoder = RNN_encoder(hidden_size, 'passage_encoder', bidirection)
         self.question_encoder = RNN_encoder(hidden_size, 'question_encoder', bidirection)
         self.option_encoder = RNN_encoder(hidden_size, 'option_encoder', bidirection)
@@ -71,7 +71,8 @@ def gen_examples(x1, x2, x3, x4, y, batch_size, concat=False):
 
 if __name__ == '__main__':
 
-    print '-' * 20, 'loading training data and vocabulary', '-' * 20
+    logging.basicConfig(level=logging.INFO,format='%(asctime)s - %(levelname)s - %(message)s')
+    logging.info('-' * 20 + 'loading training data and vocabulary' + '-' * 20)
     vocab = load_vocab('RACE/dict.pkl')
     vocab_len = len(vocab.keys())
     print vocab_len
@@ -82,14 +83,14 @@ if __name__ == '__main__':
     dev_data = load_data('RACE/data/dev/middle')
     test_data = load_data('RACE/data/test/middle/')
 
-    train_x1, train_x2, train_x3, train_x4, train_y = convert2index(train_data, vocab, sort_by_len=False)
-    dev_x1, dev_x2, dev_x3, dev_x4, dev_y = convert2index(dev_data, vocab, sort_by_len=False)
-    test_x1, test_x2, test_x3, test_x4, test_y = convert2index(test_data, vocab, sort_by_len=False)
+    train_x1, train_x2, train_x3, train_x4, train_y = convert2index(train_data, vocab, sort_by_len=True)
+    dev_x1, dev_x2, dev_x3, dev_x4, dev_y = convert2index(dev_data, vocab, sort_by_len=True)
+    test_x1, test_x2, test_x3, test_x4, test_y = convert2index(test_data, vocab, sort_by_len=True)
     all_train = gen_examples(train_x1, train_x2, train_x3, train_x4, train_y, 32)
     all_test = gen_examples(test_x1, test_x2, test_x3, test_x4, test_y, 32)
     all_dev = gen_examples(dev_x1, dev_x2, dev_x3, dev_x4, dev_y, 32)
 
-    print '-' * 20, 'Done', '-' * 20
+    logging.info('-' * 20 + 'Done' + '-' * 20)
 
     embedding_size = 100
     hidden_size = 128
@@ -134,7 +135,7 @@ if __name__ == '__main__':
     print tf.trainable_variables()
     num_epoch = 50
 
-    decay_steps = 10000
+    decay_steps = 1000
     learning_rate_decay_factor = 0.99
     global_step = tf.contrib.framework.get_or_create_global_step()
     # Smaller learning rates are sometimes necessary for larger networks
@@ -148,7 +149,7 @@ if __name__ == '__main__':
     # Logging with Tensorboard
     tf.summary.scalar('learning_rate', lr)
     tf.summary.scalar('loss', loss)
-    optimizer = tf.train.AdagradOptimizer(lr)
+    optimizer = tf.train.GradientDescentOptimizer(lr)
     grads = optimizer.compute_gradients(loss)
     # Now that we have gradients, we operationalize them by defining an operator that actually applies them.
     apply_gradient_op = optimizer.apply_gradients(grads, global_step=global_step)
@@ -187,12 +188,14 @@ if __name__ == '__main__':
                 if it % 100 == 0:
                     end_time = time.time()
                     elapsed = end_time - start_time
-                    print '-'*10, 'Epoch ',epoch, '-'*10, "Average Loss batch " + repr(it) + ":", round(loss_acc / step_idx,3), 'Elapsed time:', round(elapsed,2)
+                    logging.info(
+                        '-' * 10 + 'Epoch ' + str(epoch) + '-' * 10 + "Average Loss batch " + repr(it) + ":" + str(
+                            round(loss_acc / step_idx, 3)) + 'Elapsed time:' + str(round(elapsed, 2)))
                     start_time = time.time()
                     step_idx = 0
                     loss_acc = 0
 
-            print '-' * 20, 'testing', '-' * 20
+            logging.info('-' * 20 + 'testing' + '-' * 20)
             predicts = []
             gold = []
             step_idx = 0
@@ -211,5 +214,5 @@ if __name__ == '__main__':
                 step_idx += 1
                 loss_acc += loss_this_batch
 
-            print '-' * 10, 'Test Loss ', '-' * 10, repr(loss_acc / step_idx)
-            print '-' * 10, 'Test Accuracy:', '-' * 10, accuracy_score(gold, predicts)
+            logging.info('-' * 10 + 'Test Loss ' + '-' * 10 + repr(loss_acc / step_idx))
+            logging.info('-' * 10 + 'Test Accuracy:' + '-' * 10 + str(accuracy_score(gold, predicts)))
