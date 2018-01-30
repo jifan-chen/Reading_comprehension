@@ -16,7 +16,7 @@ class Trainer():
         self.hidden_dim = hidden_dim
         self.vocab_size = vocab_size
         self.embedding_size = embedding_size
-        self.embedding_layer = tf.get_variable("embedding", [vocab_size + 1, embedding_size], trainable=True,
+        self.embedding_layer = tf.get_variable("embedding", [vocab_size + 2, embedding_size], trainable=True,
                                                initializer=tf.constant_initializer(ini_weight))
         self.weight_mtx_dim = hidden_dim * 2 if bidirection else hidden_dim
         self.p2q_attention = AttentionLayer_tf.BilinearAttentionP2Q(self.weight_mtx_dim,'W_p2q')
@@ -38,10 +38,11 @@ class Trainer():
 
         p2q_align = self.p2q_attention.score(encoded_passage, qst_ht)  # batch x sentence_len
 
-        p2q_align = tf.expand_dims(p2q_align,axis=2)
-        p2q_align = p2q_align * msk_p
+        #p2q_align = tf.expand_dims(p2q_align,axis=2)
+        p2q_align = p2q_align * tf.squeeze(msk_p)
+        p2q_align = p2q_align / tf.expand_dims(tf.reduce_sum(p2q_align, axis=1),axis=1)
 
-        p_expectation = tf.reduce_sum(p2q_align * encoded_passage, axis=1)  # encoded_passage: batch x sentence_len x emb_dim
+        p_expectation = tf.reduce_sum(tf.expand_dims(p2q_align,axis=2) * encoded_passage, axis=1)  # encoded_passage: batch x sentence_len x emb_dim
         # print p_expectation
 
         o2p_align = self.o2p_attention.score(opt_ht,p_expectation)
@@ -61,9 +62,9 @@ def gen_examples(x1, x2, x3, x4, y, batch_size, concat=False):
         mb_x3 = [x3[t * 4 + k] for t in minibatch for k in range(4)]
         mb_x4 = [x4[t * 4 + k] for t in minibatch for k in range(4)]
         mb_y = [y[t] for t in minibatch]
-        mb_x1, mb_mask1, mb_lst1 = pad_sequences(mb_x1)
-        mb_x2, mb_mask2, mb_lst2 = utils.pad_sequences(mb_x2)
-        mb_x3, mb_mask3, mb_lst3 = utils.pad_sequences(mb_x3)
+        mb_x1, mb_mask1, mb_lst1 = prepare_data(mb_x1)
+        mb_x2, mb_mask2, mb_lst2 = prepare_data(mb_x2)
+        mb_x3, mb_mask3, mb_lst3 = prepare_data(mb_x3)
         # mb_x4, mb_mask4, mb_lst4 = pad_sequences(mb_x4)
         all_ex.append((mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3, mb_mask3, mb_lst3, mb_y))
     return all_ex
@@ -83,9 +84,9 @@ if __name__ == '__main__':
     dev_data = load_data('RACE/data/dev/middle')
     test_data = load_data('RACE/data/test/middle/')
 
-    train_x1, train_x2, train_x3, train_x4, train_y = convert2index(train_data, vocab, sort_by_len=True)
-    dev_x1, dev_x2, dev_x3, dev_x4, dev_y = convert2index(dev_data, vocab, sort_by_len=True)
-    test_x1, test_x2, test_x3, test_x4, test_y = convert2index(test_data, vocab, sort_by_len=True)
+    train_x1, train_x2, train_x3, train_x4, train_y = convert2index(train_data, vocab, sort_by_len=False)
+    dev_x1, dev_x2, dev_x3, dev_x4, dev_y = convert2index(dev_data, vocab, sort_by_len=False)
+    test_x1, test_x2, test_x3, test_x4, test_y = convert2index(test_data, vocab, sort_by_len=False)
     all_train = gen_examples(train_x1, train_x2, train_x3, train_x4, train_y, 32)
     all_test = gen_examples(test_x1, test_x2, test_x3, test_x4, test_y, 32)
     all_dev = gen_examples(dev_x1, dev_x2, dev_x3, dev_x4, dev_y, 32)
@@ -94,31 +95,35 @@ if __name__ == '__main__':
 
     embedding_size = 100
     hidden_size = 128
-    pre_embedding = load_pretrained_embedding('RACE/glove.6B/glove.6B.100d.txt')
-    init_embedding = init_embedding_matrix(vocab, pre_embedding, embedding_size)
+    #pre_embedding = load_pretrained_embedding('RACE/glove.6B/glove.6B.100d.txt')
+    init_embedding = gen_embeddings(vocab,embedding_size,'RACE/glove.6B/glove.6B.100d.txt')
+    #init_embedding_matrix(vocab, pre_embedding, embedding_size)
 
     trainer = Trainer(vocab_size=vocab_len, embedding_size=embedding_size, ini_weight=init_embedding,
                       hidden_dim=hidden_size, bidirection=True)
 
     article = tf.placeholder(tf.int32, (None, None))
-    msk_a = tf.placeholder(tf.float32, (None, None, 1))
+    msk_a = tf.placeholder(tf.float32, (None, None))
     lst_a = tf.placeholder(tf.int32, (None))
 
     qst = tf.placeholder(tf.int32, (None, None))
-    msk_qst = tf.placeholder(tf.float32, (None, None, 1))
+    msk_qst = tf.placeholder(tf.float32, (None, None))
     lst_qst = tf.placeholder(tf.int32, (None,))
 
     opt = tf.placeholder(tf.int32, (None, None))
-    msk_opt = tf.placeholder(tf.float32, (None, None, 1))
+    msk_opt = tf.placeholder(tf.float32, (None, None))
     lst_opt = tf.placeholder(tf.int32, (None))
 
-    y = tf.placeholder(tf.int32, (None))
+    y = tf.placeholder(tf.int64, (None))
 
     probs = trainer.forward(article, msk_a, lst_a, qst, msk_qst, lst_qst, opt, msk_opt, lst_opt)
+
     one_best = tf.argmax(probs, axis=1)
 
     label_onehot = tf.one_hot(y, 4)
-
+    acc = tf.equal(one_best,y)
+    acc = tf.cast(acc,tf.int32)
+    acc = tf.reduce_sum(acc)
     loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=probs, labels=label_onehot))
     # loss = tf.reduce_mean(tf.negative(tf.log(tf.reduce_sum(probs * label_onehot, axis=1))))
 
@@ -165,9 +170,11 @@ if __name__ == '__main__':
         # Write a logfile to the logs/ directory, can use Tensorboard to view this
         train_writer = tf.summary.FileWriter('logs/', sess.graph)
         # Generally want to determinize training as much as possible
-        tf.set_random_seed(0)
+        saver = tf.train.Saver()
+        tf.set_random_seed(2017)
         # Initialize variables
         sess.run(init)
+        best_acc = 0
 
         for epoch in range(num_epoch):
             step_idx = 0
@@ -200,19 +207,29 @@ if __name__ == '__main__':
             gold = []
             step_idx = 0
             loss_acc = 0
-
+            accuracy = 0
+            num = 0
             for it, (mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3,
                      mb_mask3, mb_lst3, mb_y) in enumerate(all_dev):
                 # Evaluate on the dev set
                 train_correct = 0
-                [pred_this_instance,loss_this_batch] = sess.run([one_best,loss], feed_dict={article: mb_x1, msk_a: mb_mask1, lst_a: mb_lst1,
+                [pred_this_instance,loss_this_batch,acc_this_batch] = sess.run([one_best,loss,acc], feed_dict={article: mb_x1, msk_a: mb_mask1, lst_a: mb_lst1,
                                                                        qst: mb_x2, msk_qst: mb_mask2, lst_qst: mb_lst2,
                                                                        opt: mb_x3, msk_opt: mb_mask3, lst_opt: mb_lst3, y:mb_y})
-
+                accuracy += acc_this_batch
+                num += len(mb_y)
                 predicts += list(pred_this_instance)
                 gold += mb_y
                 step_idx += 1
                 loss_acc += loss_this_batch
 
+            dev_acc = accuracy_score(gold, predicts)
+            if dev_acc > best_acc:
+                best_acc = dev_acc
+                logging.info('-' * 10 + 'Saving best model ' + '-'*10)
+                saver.save(sess,"model/best_model_sar")
+            saver.save(sess,"model/current_model_sar")
+
+            #print accuracy / float(num)
             logging.info('-' * 10 + 'Test Loss ' + '-' * 10 + repr(loss_acc / step_idx))
             logging.info('-' * 10 + 'Test Accuracy:' + '-' * 10 + str(accuracy_score(gold, predicts)))

@@ -95,8 +95,19 @@ def pad_sequences(sequences, maxlen=None, dtype='int32',
 
 
     assert len(last_position) == len(x)
-    mask = mask.reshape(num_samples,maxlen,1)
+    #mask = mask.reshape(num_samples,maxlen,1)
     return x,mask,last_position
+
+def prepare_data(seqs):
+    lengths = [len(seq) for seq in seqs]
+    n_samples = len(seqs)
+    max_len = np.max(lengths)
+    x = np.zeros((n_samples, max_len)).astype('int32')
+    x_mask = np.zeros((n_samples, max_len)).astype(np.float)
+    for idx, seq in enumerate(seqs):
+        x[idx, :lengths[idx]] = seq
+        x_mask[idx, :lengths[idx]] = 1.0
+    return x, x_mask, lengths
 
 
 def read_data(dir_url):
@@ -245,7 +256,11 @@ def load_data(in_file, max_example=None, relabeling=True):
     files = get_file(in_file)
 
     for inf in files:
-        obj = json.load(open(inf, "r"))
+        try:
+            obj = json.load(open(inf, "r"))
+        except ValueError:
+            print inf
+            continue
 
         for i, q in enumerate(obj["questions"]):
             question_belong += [inf]
@@ -400,6 +415,43 @@ def export_processed_data(passages,vocab,out_url):
 
     pkl.dump(processed_data,open(out_url,'w'))
 
+def gen_embeddings(word_dict, dim, in_file=None):
+    """
+        Generate an initial embedding matrix for `word_dict`.
+        If an embedding file is not given or a word is not in the embedding file,
+        a randomly initialized vector will be used.
+    """
+
+    num_words = max(word_dict.values()) + 1
+    embeddings = np.random.uniform(-0.1,0.1,[num_words,dim])
+    logging.info('Embeddings: %d x %d' % (num_words, dim))
+
+    if in_file is not None:
+        logging.info('Loading embedding file: %s' % in_file)
+        pre_trained = 0
+        initialized = {}
+        avg_sigma = 0
+        avg_mu = 0
+        for line in open(in_file).readlines():
+            sp = line.split()
+            assert len(sp) == dim + 1
+            if sp[0] in word_dict:
+                initialized[sp[0]] = True
+                pre_trained += 1
+                embeddings[word_dict[sp[0]]] = [float(x) for x in sp[1:]]
+                mu = embeddings[word_dict[sp[0]]].mean()
+                #print embeddings[word_dict[sp[0]]]
+                sigma = np.std(embeddings[word_dict[sp[0]]])
+                avg_mu += mu
+                avg_sigma += sigma
+        avg_sigma /= 1. * pre_trained
+        avg_mu /= 1. * pre_trained
+        for w in word_dict:
+            if w not in initialized:
+                embeddings[word_dict[w]] = np.random.normal(avg_mu, avg_sigma, (dim,))
+        logging.info('Pre-trained: %d (%.2f%%)' %
+                     (pre_trained, pre_trained * 100.0 / num_words))
+    return embeddings
 
 def export_vocab(vocab,out_url):
     pkl.dump(vocab, open(out_url, 'w'))

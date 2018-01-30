@@ -18,50 +18,96 @@ class Trainer():
         self.hidden_dim = hidden_dim
         self.vocab_size = vocab_size
         self.embedding_size = embedding_size
-        self.embedding_layer = tf.get_variable("embedding", [vocab_size + 1, embedding_size], trainable=True,
+        self.embedding_layer = tf.get_variable("embedding", [vocab_size + 2, embedding_size], trainable=True,
                                           initializer=tf.constant_initializer(ini_weight))
         self.weight_mtx_dim = hidden_dim * 2 if bidirection else hidden_dim
-        self.p2qa_attention = AttentionLayer_tf.BilinearAttentionP2QA(self.weight_mtx_dim,'W_p2qa')
-        self.option_dot_product = AttentionLayer_tf.DotProductAttention(self.weight_mtx_dim,'W_dotprod')
+        self.m1_attention = AttentionLayer_tf.BilinearAttentionP2QA(self.weight_mtx_dim, 'W_m1')
+        self.m2_attention = AttentionLayer_tf.BilinearAttentionP2QA(self.weight_mtx_dim, 'W_m2')
+        self.m3_attention = AttentionLayer_tf.BilinearAttentionP2QA(self.weight_mtx_dim, 'W_m3')
+        #self.option_dot_product = AttentionLayer_tf.DotProductAttention(self.weight_mtx_dim,'W_dotprod')
         self.p2opt_attention = AttentionLayer_tf.BilinearAttentionP2QA(self.weight_mtx_dim,'W_p2opt')
+        self.opt2p_attention = AttentionLayer_tf.BilinearAttentionO2P(self.weight_mtx_dim,'W_opt2p')
         self.q2opt_attention = AttentionLayer_tf.BilinearAttentionO2P(self.weight_mtx_dim,'W_q2opt')
+        self.p2opt_dot = AttentionLayer_tf.BilinearDotM2M(self.weight_mtx_dim,'W_p2opt_dot')
 
-        self.passage_encoder = RNN_encoder(hidden_size,'passage_encoder',bidirection,keep_prob=0.8)
-        self.question_encoder = RNN_encoder(hidden_size,'question_encoder',bidirection,keep_prob=0.8)
-        self.option_encoder = RNN_encoder(hidden_size,'option_encoder',bidirection,keep_prob=0.8)
+        self.passage_encoder = RNN_encoder(hidden_dim,'passage_encoder',bidirection,keep_prob=0.5)
+        self.question_encoder = RNN_encoder(hidden_dim,'question_encoder',bidirection,keep_prob=0.5)
+        self.option_encoder = RNN_encoder(hidden_dim,'option_encoder',bidirection,keep_prob=0.5)
+        self.gated_encoder1 = RNN_encoder(hidden_dim,'g1_encoder',bidirection,keep_prob=0.5,reuse=tf.AUTO_REUSE)
+        self.gated_encoder2 = RNN_encoder(hidden_dim,'g2_encoder',bidirection,keep_prob=0.5)
+
+        self.psg_selfatt = AttentionLayer_tf.SelfAttention(self.weight_mtx_dim,'passage')
+        self.qst_selfatt = AttentionLayer_tf.SelfAttention(self.weight_mtx_dim,'question')
+        self.opt_selfatt = AttentionLayer_tf.SelfAttention(self.weight_mtx_dim,'option')
+
+        self.gated_att1 = AttentionLayer_tf.GatedAttention(self.hidden_dim, self.weight_mtx_dim, 'gated1')
+        self.gated_att2 = AttentionLayer_tf.GatedAttention(self.hidden_dim, self.weight_mtx_dim, 'gated2')
 
     def forward(self, passage, msk_p, lst_p, qst, msk_qst, lst_qst, opt, msk_opt, lst_opt,dropout_rate):
         v_passage = tf.nn.embedding_lookup(self.embedding_layer,passage)
-        #v_passage = tf.nn.dropout(v_passage,dropout_rate)
         v_qst = tf.nn.embedding_lookup(self.embedding_layer,qst)
-        #v_qst = tf.nn.dropout(v_qst,dropout_rate)
         v_opt = tf.nn.embedding_lookup(self.embedding_layer,opt)
-        #v_opt = tf.nn.dropout(v_opt,dropout_rate)
 
         p_ht, encoded_passage = self.passage_encoder.encode(v_passage, lst_p )
+        #attended_passage = self.psg_selfatt.apply_self_attention(encoded_passage)
+        #encoded_passage = attended_passage
         qst_ht, encoded_question = self.question_encoder.encode(v_qst, lst_qst)
+        #encoded_question = self.qst_selfatt.apply_self_attention(encoded_question)
+        #qst_ht += tf.reduce_sum(encoded_question,axis=1)
         opt_ht, encoded_option = self.option_encoder.encode(v_opt, lst_opt)
-
+        #encoded_option = self.opt_selfatt.apply_self_attention(encoded_option)
+        #opt_ht += tf.reduce_sum(encoded_option,axis=1)
         opt_ht = tf.reshape(opt_ht, [-1, self.option_number, self.weight_mtx_dim])
-        msk_p = tf.squeeze(msk_p)
-        msk_p = tf.expand_dims(msk_p, 1)
 
-        p2opt_align = self.p2opt_attention.score(encoded_passage, opt_ht)
-        p2opt_align = p2opt_align * msk_p
-        popt_expectation = tf.matmul(p2opt_align, encoded_passage)
+        gated1 = self.gated_att1.apply_attention(encoded_question,encoded_passage,msk_qst)
+        ght1,encoded_g1 = self.gated_encoder1.encode(gated1,lst_p)
+        gated1 = self.gated_att1.apply_attention(encoded_question, encoded_g1, msk_qst)
+        ght1, encoded_g2 = self.gated_encoder1.encode(gated1, lst_p)
+
 
         qst_ht = tf.expand_dims(qst_ht, 1)
+        opt_ht += qst_ht
+        p2opt_align = self.p2opt_attention.score(encoded_g2, opt_ht)  # p2opt_align: batch x question_num x sentence_len
+        p2opt_align = tf.reduce_sum(p2opt_align)
+        p2opt_align = p2opt_align * msk_p
+
+        p2opt_align = p2opt_align / tf.expand_dims(tf.reduce_sum(p2opt_align, axis=1), axis=1)
+
+        popt_expectation = tf.reduce_sum(tf.expand_dims(p2opt_align, axis=2) * encoded_passage, axis=1)
+
         qstopt_ht = opt_ht + qst_ht
-        p2qa_align = self.p2qa_attention.score(encoded_passage,qstopt_ht)  # p2qa_align: batch x question_num x sentence_len
-        p2qa_align = p2qa_align * msk_p
-        pqa_expectation = tf.matmul(p2qa_align, encoded_passage)  # encoded_passage: batch x sentence_len x emb_dim
 
-        expectation = pqa_expectation + popt_expectation
+        probs = self.opt2p_attention.score(qstopt_ht,popt_expectation)
+        return probs
 
-        #o2p_align = self.option_dot_product.score(pqa_expectation)
-        o2q_align = self.q2opt_attention.score(expectation,tf.squeeze(qst_ht))
+        #popt_expectation = tf.matmul(p2opt_align, encoded_passage)
+
+        '''
+        msk_p = tf.expand_dims(msk_p, 1)
+        qst_ht = tf.expand_dims(qst_ht, 1)
+        qstopt_ht = opt_ht + qst_ht
+        m1_align = self.m1_attention.score(encoded_passage, qstopt_ht)  # p2qa_align: batch x question_num x sentence_len
+        m1_align = m1_align * msk_p
+        m1_align = m1_align / tf.expand_dims(tf.reduce_sum(m1_align, axis=2), axis=2)
+        m1 = tf.matmul(m1_align, encoded_passage)  # encoded_passage: batch x sentence_len x emb_dim
+
+        m2_align = self.m2_attention.score(encoded_passage, qstopt_ht + m1)
+        m2_align = m2_align * msk_p
+        m2_align = m2_align / tf.expand_dims(tf.reduce_sum(m2_align, axis=2), axis=2)
+        m2 = tf.matmul(m2_align,encoded_passage)
+
+        m3_align = self.m3_attention.score(encoded_passage, qstopt_ht + m2)
+        m3_align = m3_align * msk_p
+        m3_align = m3_align / tf.expand_dims(tf.reduce_sum(m3_align, axis=2), axis=2)
+        m3 = tf.matmul(m3_align, encoded_passage)
+
+        m = m1 + m2 + m3
+        expectation = m
+        '''
+        o2q_align = self.p2opt_dot.score(expectation,qstopt_ht)
 
         return o2q_align
+
 
 def gen_examples(x1, x2, x3, x4, y ,batch_size, concat=False):
     """
@@ -75,9 +121,9 @@ def gen_examples(x1, x2, x3, x4, y ,batch_size, concat=False):
         mb_x3 = [x3[t * 4 + k] for t in minibatch for k in range(4)]
         mb_x4 = [x4[t * 4 + k] for t in minibatch for k in range(4)]
         mb_y = [y[t] for t in minibatch]
-        mb_x1, mb_mask1, mb_lst1 = pad_sequences(mb_x1)
-        mb_x2, mb_mask2, mb_lst2 = utils.pad_sequences(mb_x2)
-        mb_x3, mb_mask3, mb_lst3 = utils.pad_sequences(mb_x3)
+        mb_x1, mb_mask1, mb_lst1 = prepare_data(mb_x1)
+        mb_x2, mb_mask2, mb_lst2 = prepare_data(mb_x2)
+        mb_x3, mb_mask3, mb_lst3 = prepare_data(mb_x3)
         #mb_x4, mb_mask4, mb_lst4 = pad_sequences(mb_x4)
         all_ex.append((mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3, mb_mask3, mb_lst3 ,mb_y))
     return all_ex
@@ -92,13 +138,13 @@ if __name__ == '__main__':
     batch_size = 32
 
     # data loaded order: doc, question, option, Qst+Opt, Answer
-    train_data= load_data('RACE/data/train/middle/')
+    train_data= load_data('RACE/data/train/middle')
     dev_data = load_data('RACE/data/dev/middle')
     test_data = load_data('RACE/data/test/middle/')
 
-    train_x1, train_x2, train_x3, train_x4, train_y = convert2index(train_data, vocab,sort_by_len=True)
-    dev_x1, dev_x2, dev_x3, dev_x4, dev_y = convert2index(dev_data, vocab,sort_by_len=True)
-    test_x1, test_x2, test_x3, test_x4, test_y = convert2index(test_data, vocab,sort_by_len=True)
+    train_x1, train_x2, train_x3, train_x4, train_y = convert2index(train_data, vocab,sort_by_len=False)
+    dev_x1, dev_x2, dev_x3, dev_x4, dev_y = convert2index(dev_data, vocab,sort_by_len=False)
+    test_x1, test_x2, test_x3, test_x4, test_y = convert2index(test_data, vocab,sort_by_len=False)
     all_train = gen_examples(train_x1, train_x2, train_x3, train_x4, train_y, 32)
     all_test = gen_examples(test_x1, test_x2, test_x3, test_x4, test_y,32)
     all_dev = gen_examples(dev_x1, dev_x2, dev_x3, dev_x4, dev_y,32)
@@ -107,21 +153,21 @@ if __name__ == '__main__':
 
     embedding_size = 100
     hidden_size = 128
-    pre_embedding = load_pretrained_embedding('RACE/glove.6B/glove.6B.100d.txt')
-    init_embedding = init_embedding_matrix(vocab,pre_embedding,embedding_size)
-
+    #pre_embedding = load_pretrained_embedding('RACE/glove.6B/glove.6B.100d.txt')
+    #init_embedding = init_embedding_matrix(vocab,pre_embedding,embedding_size)
+    init_embedding = gen_embeddings(vocab, embedding_size, 'RACE/glove.6B/glove.6B.100d.txt')
     trainer = Trainer(vocab_size=vocab_len,embedding_size=embedding_size,ini_weight=init_embedding,hidden_dim=hidden_size,bidirection=True)
 
     article = tf.placeholder(tf.int32,(None,None))
-    msk_a = tf.placeholder(tf.float32,(None,None,1))
+    msk_a = tf.placeholder(tf.float32,(None,None))
     lst_a = tf.placeholder(tf.int32,(None))
 
     qst = tf.placeholder(tf.int32,(None,None))
-    msk_qst = tf.placeholder(tf.float32,(None,None,1))
+    msk_qst = tf.placeholder(tf.float32,(None,None))
     lst_qst = tf.placeholder(tf.int32,(None,))
 
     opt = tf.placeholder(tf.int32,(None,None))
-    msk_opt = tf.placeholder(tf.float32,(None,None,1))
+    msk_opt = tf.placeholder(tf.float32,(None,None))
     lst_opt = tf.placeholder(tf.int32,(None))
 
     dropout_rate = tf.placeholder_with_default(1.0, shape=())
@@ -147,7 +193,7 @@ if __name__ == '__main__':
                                     qst: all_test[0][3], msk_qst: all_test[0][4], lst_qst: all_test[0][5],
                                     opt: all_test[0][6], msk_opt: all_test[0][7], lst_opt: all_test[0][8],
                                     y:all_test[0][9],dropout_rate:0.5})
-    print debug_output.shape
+    print 'debug output:',debug_output.shape
 
     print tf.trainable_variables()
     num_epoch = 50
@@ -178,10 +224,14 @@ if __name__ == '__main__':
     num_epochs = 50
     merged = tf.summary.merge_all()  # merge all the tensorboard variables
 
+
+
     with tf.Session() as sess:
         # Write a logfile to the logs/ directory, can use Tensorboard to view this
         train_writer = tf.summary.FileWriter('logs/', sess.graph)
         # Generally want to determinize training as much as possible
+        saver = tf.train.Saver()
+        best_acc = 0
         tf.set_random_seed(0)
         # Initialize variables
         sess.run(init)
@@ -232,5 +282,12 @@ if __name__ == '__main__':
                 step_idx += 1
                 loss_acc += loss_this_batch
 
+            dev_acc = accuracy_score(gold, predicts)
+            if dev_acc > best_acc:
+                best_acc = dev_acc
+                logging.info('-' * 10 + 'Saving best model ' + '-'*10)
+                saver.save(sess,"model/best_model")
+            saver.save(sess,"model/current_model")
             logging.info('-' * 10 + 'Test Loss ' + '-' * 10 + repr(loss_acc / step_idx))
             logging.info('-' * 10 + 'Test Accuracy:' + '-' * 10 + str(accuracy_score(gold, predicts)))
+            logging.info('-' * 10 + 'Best Accuracy:' + '-'*10 + str(best_acc))
