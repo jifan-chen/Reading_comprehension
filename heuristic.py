@@ -68,7 +68,7 @@ def load_data(in_file, max_example=None, relabeling=True):
     return (documents, questions, options,qs_op,answers,evidences)
 
 
-data = utils.load_data('RACE/data/train/middle_annotate')
+data = utils.load_data('fact_questions/test/middle/')
 rouge = Rouge()
 passages = data[0]
 questions = data[1]

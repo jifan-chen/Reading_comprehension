@@ -99,6 +99,22 @@ class BilinearDotM2M():
         score = tf.reduce_sum(tmp * s2,axis=2)
         return score
 
+class BilinearAttentionM2M():
+
+    def __init__(self,dim,vname):
+        self.W = tf.get_variable(vname, [dim, dim], initializer=tf.contrib.layers.xavier_initializer())
+        self.dim = dim
+
+    def score(self,s1,s2,mask):
+        '''
+        s1 -- batch x length x dim
+        s2 -- batch x length x dim
+        W -- dim x dim
+        return batch x length
+        '''
+        tmp = tf.tensordot(s1,self.W,[[2],[0]])
+        score = tf.reduce_sum(tmp * s2,axis=2)
+        return score
 class SelfAttention():
 
     def __init__(self,dim,vname):
@@ -137,11 +153,33 @@ class GatedAttention():
         :param W: dim x dim
         :return: batch x length x dim
         '''
-        #qt = tf.tensordot(query,self.W,[[2],[0]])
-        qt = tf.transpose(query,[0,2,1])
+        qt = tf.tensordot(query,self.W,[[2],[0]])
+        qt = tf.transpose(qt,[0,2,1])
         alpha = tf.nn.softmax(tf.matmul(value,qt))
         alpha = alpha * tf.expand_dims(q_mask,1)
         alpha = alpha / tf.reduce_sum(alpha,axis=2,keep_dims=True)
+        qhat = tf.matmul(alpha,query)
+
+        dgated = qhat * value
+        return dgated
+
+class GatedAttentionWithOption():
+    def __init__(self,hidden_dim,weight_dim,vname):
+        self.W = tf.get_variable(vname+'W',[weight_dim,weight_dim],initializer=tf.contrib.layers.xavier_initializer())
+        #self.encoder = RNN_encoder(hidden_dim,vname+'encoder',bidirectional=True)
+
+    def apply_attention(self,query,value,q_mask):
+        '''
+        :param query: batch x num x o_length x dim
+        :param value: batch x num x d_length x dim
+        :param W: dim x dim
+        :return: batch x length x dim
+        '''
+        qt = tf.tensordot(query,self.W,[[3],[0]])
+        qt = tf.transpose(qt,[0,1,3,2])
+        alpha = tf.nn.softmax(tf.matmul(value,qt))
+        alpha = alpha * tf.expand_dims(q_mask,2)
+        alpha = alpha / tf.reduce_sum(alpha,axis=3,keep_dims=True)
         qhat = tf.matmul(alpha,query)
 
         dgated = qhat * value

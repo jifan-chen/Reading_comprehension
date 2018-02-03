@@ -25,13 +25,9 @@ class Trainer():
         self.embedding_layer = tf.get_variable("embedding", [vocab_size + 2, embedding_size], trainable=True,
                                           initializer=tf.constant_initializer(ini_weight))
         self.weight_mtx_dim = hidden_dim * 2 if bidirection else hidden_dim
-        self.p2qa_attention = AttentionLayer_tf.BilinearAttentionP2QA(self.weight_mtx_dim,'W_p2qa')
-        #self.option_dot_product = AttentionLayer_tf.DotProductAttention(self.weight_mtx_dim,'W_dotprod')
-        self.p2opt_attention = AttentionLayer_tf.BilinearAttentionP2QA(self.weight_mtx_dim,'W_p2opt')
-        self.opt2p_attention = AttentionLayer_tf.BilinearAttentionO2P(self.weight_mtx_dim,'W_opt2p')
-        self.q2opt_attention = AttentionLayer_tf.BilinearAttentionO2P(self.weight_mtx_dim,'W_q2opt')
         self.e2opt_attention = AttentionLayer_tf.BilinearAttentionP2Q(self.weight_mtx_dim,'W_e2opt')
-        self.e2opt_dot = AttentionLayer_tf.BilinearDotM2M(self.weight_mtx_dim,'W_e2opt_dot')
+        self.e2opt_dot1 = AttentionLayer_tf.BilinearDotM2M(self.weight_mtx_dim,'W_e2opt_dot1')
+        self.e2opt_dot2 = AttentionLayer_tf.BilinearDotM2M(self.weight_mtx_dim,'W_e2opt_dot2')
 
         self.passage_encoder = RNN_encoder(hidden_dim,'passage_encoder',bidirection,keep_prob=0.8)
         self.question_encoder = RNN_encoder(hidden_dim,'question_encoder',bidirection,keep_prob=0.8)
@@ -70,8 +66,9 @@ class Trainer():
         qst_ht = tf.expand_dims(qst_ht, 1)
         qstopt_ht = opt_ht + qst_ht
 
-        probs = self.e2opt_dot.score(evd_ht,qstopt_ht)
-        return probs
+        probs_qstopt = self.e2opt_dot1.score(evd_ht,qstopt_ht)
+        probs_opt = self.e2opt_dot2.score(evd_ht,opt_ht)
+        return probs_qstopt + probs_opt
 
         evd_score = tf.reshape(evd_score,[-1,self.option_number,1])
         evd_score = evd_score / tf.expand_dims(tf.reduce_sum(evd_score,axis=1),axis=1)
@@ -315,8 +312,8 @@ if __name__ == '__main__':
     batch_size = 32
 
     # data loaded order: doc, question, option, Qst+Opt, Answer
-    train_data= load_data('RACE/data/train/middle')
-    dev_data = load_data('RACE/data/test/middle')
+    train_data= load_data('none_fact_questions/train/middle')
+    dev_data = load_data('none_fact_questions/test/middle')
     #test_data = load_data('RACE/data/test/middle/')
 
     train_x1, train_x2, train_x3, train_x4, train_x5, train_x6, train_y = convert2index(train_data, vocab,sort_by_len=False)
@@ -416,7 +413,7 @@ if __name__ == '__main__':
         # Generally want to determinize training as much as possible
         saver = tf.train.Saver()
         best_acc = 0
-        tf.set_random_seed(0)
+        #tf.set_random_seed(0)
         # Initialize variables
         sess.run(init)
 
@@ -424,7 +421,7 @@ if __name__ == '__main__':
             step_idx = 0
             loss_acc = 0
             start_time = time.time()
-
+            np.random.shuffle(all_train)
             for it, (mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3,
                      mb_mask3, mb_lst3, mb_x4, mb_mask4, mb_lst4, mb_s, mb_y) in enumerate(all_train):
 

@@ -25,12 +25,12 @@ class Trainer():
         self.m2_attention = AttentionLayer_tf.BilinearAttentionP2QA(self.weight_mtx_dim, 'W_m2')
         self.m3_attention = AttentionLayer_tf.BilinearAttentionP2QA(self.weight_mtx_dim, 'W_m3')
         #self.option_dot_product = AttentionLayer_tf.DotProductAttention(self.weight_mtx_dim,'W_dotprod')
-        self.p2opt_attention = AttentionLayer_tf.BilinearAttentionP2QA(self.weight_mtx_dim,'W_p2opt')
+        self.p2opt_attention = AttentionLayer_tf.BilinearAttentionP2Q(self.weight_mtx_dim,'W_p2opt')
         self.opt2p_attention = AttentionLayer_tf.BilinearAttentionO2P(self.weight_mtx_dim,'W_opt2p')
         self.q2opt_attention = AttentionLayer_tf.BilinearAttentionO2P(self.weight_mtx_dim,'W_q2opt')
         self.p2opt_dot = AttentionLayer_tf.BilinearDotM2M(self.weight_mtx_dim,'W_p2opt_dot')
 
-        self.passage_encoder = RNN_encoder(hidden_dim,'passage_encoder',bidirection,keep_prob=0.5)
+        self.passage_encoder = RNN_encoder(hidden_dim,'passage_encoder',bidirection,keep_prob=0.5,reuse=tf.AUTO_REUSE)
         self.question_encoder = RNN_encoder(hidden_dim,'question_encoder',bidirection,keep_prob=0.5)
         self.option_encoder = RNN_encoder(hidden_dim,'option_encoder',bidirection,keep_prob=0.5)
         self.gated_encoder1 = RNN_encoder(hidden_dim,'g1_encoder',bidirection,keep_prob=0.5,reuse=tf.AUTO_REUSE)
@@ -57,27 +57,27 @@ class Trainer():
         opt_ht, encoded_option = self.option_encoder.encode(v_opt, lst_opt)
         #encoded_option = self.opt_selfatt.apply_self_attention(encoded_option)
         #opt_ht += tf.reduce_sum(encoded_option,axis=1)
-        opt_ht = tf.reshape(opt_ht, [-1, self.option_number, self.weight_mtx_dim])
 
-        gated1 = self.gated_att1.apply_attention(encoded_question,encoded_passage,msk_qst)
+
+        gated1 = self.gated_att1.apply_attention(encoded_option,encoded_passage,msk_opt)
         ght1,encoded_g1 = self.gated_encoder1.encode(gated1,lst_p)
-        gated1 = self.gated_att1.apply_attention(encoded_question, encoded_g1, msk_qst)
-        ght1, encoded_g2 = self.gated_encoder1.encode(gated1, lst_p)
+        gated2 = self.gated_att1.apply_attention(encoded_option, encoded_g1, msk_opt)
+        #ght2, encoded_g2 = self.gated_encoder1.encode(gated2, lst_p)
+        #gated3 = self.gated_att1.apply_attention(encoded_option, encoded_g2, msk_qst)
 
 
-        qst_ht = tf.expand_dims(qst_ht, 1)
-        opt_ht += qst_ht
-        p2opt_align = self.p2opt_attention.score(encoded_g2, opt_ht)  # p2opt_align: batch x question_num x sentence_len
-        p2opt_align = tf.reduce_sum(p2opt_align)
+        p2opt_align = self.p2opt_attention.score(gated2, opt_ht)  # p2opt_align: batch x question_num x sentence_len
         p2opt_align = p2opt_align * msk_p
 
         p2opt_align = p2opt_align / tf.expand_dims(tf.reduce_sum(p2opt_align, axis=1), axis=1)
 
         popt_expectation = tf.reduce_sum(tf.expand_dims(p2opt_align, axis=2) * encoded_passage, axis=1)
-
+        popt_expectation = tf.reshape(popt_expectation,[-1, self.option_number, self.weight_mtx_dim])
+        opt_ht = tf.reshape(opt_ht, [-1, self.option_number, self.weight_mtx_dim])
+        qst_ht = tf.expand_dims(qst_ht, 1)
         qstopt_ht = opt_ht + qst_ht
 
-        probs = self.opt2p_attention.score(qstopt_ht,popt_expectation)
+        probs = self.p2opt_dot.score(qstopt_ht,popt_expectation)
         return probs
 
         #popt_expectation = tf.matmul(p2opt_align, encoded_passage)
@@ -108,15 +108,88 @@ class Trainer():
 
         return o2q_align
 
+def convert2index(examples, word_dict,
+                  sort_by_len=True, verbose=True, concat=False):
+    """
+        Vectorize `examples`.
+        in_x1, in_x2: sequences for document and question respecitvely.
+        in_y: label
+        in_l: whether the entity label occurs in the document.
+    """
+    in_x1 = []
+    in_x2 = []
+    in_x3 = []
+    in_x4 = []
+    in_y = []
+    def get_vector(st):
+        seq = [word_dict[w] if w in word_dict else 0 for w in st]
+        return seq
+
+    for idx, (q, a) in enumerate(zip(examples[1], examples[4])):
+        q_words = q.split(' ')
+        assert 0 <= a <= 3
+        seq2 = get_vector(q_words)
+        if (len(seq2) > 0):
+            in_x2 += [seq2]
+            option_seq = []
+            qsop_seq  = []
+            psg_seq = []
+            for i in range(4):
+                if concat:
+                    op = " ".join(q_words) + ' @ ' + examples[2][i + idx * 4]
+                else:
+                    op = examples[2][i + idx * 4]
+                    qsop = examples[3][i + idx*4]
+                    psg = examples[0][i+idx*4]
+                op = op.split(' ')
+                qsop = qsop.split(' ')
+                psg = psg.split(' ')
+                option = get_vector(op)
+                question_option = get_vector(qsop)
+                passage = get_vector(psg)
+                assert len(option) > 0
+                option_seq += [option]
+                qsop_seq += [question_option]
+                psg_seq += [passage]
+
+            in_x1 += [psg_seq]
+            in_x3 += [option_seq]
+            in_x4 += [qsop_seq]
+            in_y.append(a)
+        if verbose and (idx % 10000 == 0):
+            logging.info('Vectorization: processed %d / %d' % (idx, len(examples[1])))
+
+    def len_argsort(seq):
+        return sorted(range(len(seq)), key=lambda x: len(seq[x]))
+
+    if sort_by_len:
+        # sort by the document length
+        sorted_index = len_argsort(in_x1)
+        #print sorted_index
+        in_x1 = [in_x1[i] for i in sorted_index]
+        in_x2 = [in_x2[i] for i in sorted_index]
+        in_y = [in_y[i] for i in sorted_index]
+        in_x3 = [in_x3[i] for i in sorted_index]
+        in_x4 = [in_x4[i] for i in sorted_index]
+    new_in_x1 = []
+    new_in_x3 = []
+    new_in_x4 = []
+    for i,j,k in zip(in_x1,in_x3,in_x4):
+        #print i
+        new_in_x1 += i
+        new_in_x3 += j
+        new_in_x4 += k
+    #print new_in_x3
+    return new_in_x1, in_x2, new_in_x3, new_in_x4, in_y
 
 def gen_examples(x1, x2, x3, x4, y ,batch_size, concat=False):
     """
         Divide examples into batches of size `batch_size`.
     """
-    minibatches = get_minibatches(len(x1), batch_size)
+    minibatches = get_minibatches(len(x2), batch_size)
     all_ex = []
     for minibatch in minibatches:
-        mb_x1 = [x1[t] for t in minibatch]
+        mb_x1 = [x1[t * 4 + k] for t in minibatch for k in range(4)]
         mb_x2 = [x2[t] for t in minibatch]
         mb_x3 = [x3[t * 4 + k] for t in minibatch for k in range(4)]
         mb_x4 = [x4[t * 4 + k] for t in minibatch for k in range(4)]
@@ -138,8 +211,8 @@ if __name__ == '__main__':
     batch_size = 32
 
     # data loaded order: doc, question, option, Qst+Opt, Answer
-    train_data= load_data('RACE/data/train/middle')
-    dev_data = load_data('RACE/data/dev/middle')
+    train_data= load_data('fact_questions/train/middle')
+    dev_data = load_data('fact_questions/dev/middle')
     test_data = load_data('RACE/data/test/middle/')
 
     train_x1, train_x2, train_x3, train_x4, train_y = convert2index(train_data, vocab,sort_by_len=False)
@@ -189,6 +262,7 @@ if __name__ == '__main__':
     sess.run(init)
     #print all_test[0][0].shape, all_test[0][1].shape, all_test[0][2]
     #print all_test[0][9]
+
     debug_output = sess.run(probs, {article: all_test[0][0], msk_a: all_test[0][1], lst_a: all_test[0][2],
                                     qst: all_test[0][3], msk_qst: all_test[0][4], lst_qst: all_test[0][5],
                                     opt: all_test[0][6], msk_opt: all_test[0][7], lst_opt: all_test[0][8],
@@ -198,11 +272,11 @@ if __name__ == '__main__':
     print tf.trainable_variables()
     num_epoch = 50
 
-    decay_steps = 1000
+    decay_steps = 10000
     learning_rate_decay_factor = 0.99
     global_step = tf.contrib.framework.get_or_create_global_step()
     # Smaller learning rates are sometimes necessary for larger networks
-    initial_learning_rate = 0.1
+    initial_learning_rate = 0.3
     # Decay the learning rate exponentially based on the number of steps.
     lr = tf.train.exponential_decay(initial_learning_rate,
                                     global_step,
@@ -214,7 +288,12 @@ if __name__ == '__main__':
     tf.summary.scalar('loss', loss)
     optimizer = tf.train.GradientDescentOptimizer(lr)
     grads = optimizer.compute_gradients(loss)
-    apply_gradient_op = optimizer.apply_gradients(grads, global_step=global_step)
+    def clip_not_none(grad):
+        if grad is None:
+            return grad
+        return tf.clip_by_value(grad, -10, 10)
+    capped_gvs = [(clip_not_none(grad), var) for grad, var in grads]
+    apply_gradient_op = optimizer.apply_gradients(capped_gvs, global_step=global_step)
     with tf.control_dependencies([apply_gradient_op]):
         train_op = tf.no_op(name='train')
 
@@ -236,11 +315,12 @@ if __name__ == '__main__':
         # Initialize variables
         sess.run(init)
 
+        nupdate = 0
         for epoch in range(num_epoch):
             step_idx = 0
             loss_acc = 0
             start_time = time.time()
-
+            np.random.shuffle(all_train)
             for it, (mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3,
                      mb_mask3, mb_lst3, mb_y) in enumerate(all_train):
 
@@ -251,7 +331,7 @@ if __name__ == '__main__':
 
                 step_idx += 1
                 loss_acc += loss_this_batch
-
+                nupdate += 1
                 if it % 100 == 0:
                     end_time = time.time()
                     elapsed = end_time - start_time
@@ -261,33 +341,34 @@ if __name__ == '__main__':
                     step_idx = 0
                     loss_acc = 0
 
+                if nupdate % 1000 == 0:
+                    logging.info('-' * 20 +'testing' + '-' * 20)
+                    predicts = []
+                    gold = []
+                    step_idx = 0
+                    loss_acc = 0
 
-            logging.info('-' * 20 +'testing' + '-' * 20)
-            predicts = []
-            gold = []
-            step_idx = 0
-            loss_acc = 0
 
-            for it, (mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3,
-                     mb_mask3, mb_lst3, mb_y) in enumerate(all_dev):
-                # Evaluate on the dev set
-                train_correct = 0
-                [pred_this_instance, loss_this_batch] = sess.run([one_best, loss],
-                                                                 feed_dict={article: mb_x1, msk_a: mb_mask1,lst_a: mb_lst1,
-                                                                    qst: mb_x2, msk_qst: mb_mask2,lst_qst: mb_lst2,
-                                                                    opt: mb_x3, msk_opt: mb_mask3,lst_opt: mb_lst3, y: mb_y, dropout_rate:1.0})
+                    for it, (mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3,
+                             mb_mask3, mb_lst3, mb_y) in enumerate(all_dev):
+                        # Evaluate on the dev set
+                        train_correct = 0
+                        [pred_this_instance, loss_this_batch] = sess.run([one_best, loss],
+                                                                         feed_dict={article: mb_x1, msk_a: mb_mask1,lst_a: mb_lst1,
+                                                                            qst: mb_x2, msk_qst: mb_mask2,lst_qst: mb_lst2,
+                                                                            opt: mb_x3, msk_opt: mb_mask3,lst_opt: mb_lst3, y: mb_y, dropout_rate:1.0})
 
-                predicts += list(pred_this_instance)
-                gold += mb_y
-                step_idx += 1
-                loss_acc += loss_this_batch
+                        predicts += list(pred_this_instance)
+                        gold += mb_y
+                        step_idx += 1
+                        loss_acc += loss_this_batch
 
-            dev_acc = accuracy_score(gold, predicts)
-            if dev_acc > best_acc:
-                best_acc = dev_acc
-                logging.info('-' * 10 + 'Saving best model ' + '-'*10)
-                saver.save(sess,"model/best_model")
-            saver.save(sess,"model/current_model")
-            logging.info('-' * 10 + 'Test Loss ' + '-' * 10 + repr(loss_acc / step_idx))
-            logging.info('-' * 10 + 'Test Accuracy:' + '-' * 10 + str(accuracy_score(gold, predicts)))
-            logging.info('-' * 10 + 'Best Accuracy:' + '-'*10 + str(best_acc))
+                    dev_acc = accuracy_score(gold, predicts)
+                    if dev_acc > best_acc:
+                        best_acc = dev_acc
+                        logging.info('-' * 10 + 'Saving best model ' + '-'*10)
+                        saver.save(sess,"model/best_model")
+                    saver.save(sess,"model/current_model")
+                    logging.info('-' * 10 + 'Test Loss ' + '-' * 10 + repr(loss_acc / step_idx))
+                    logging.info('-' * 10 + 'Test Accuracy:' + '-' * 10 + str(accuracy_score(gold, predicts)))
+                    logging.info('-' * 10 + 'Best Accuracy:' + '-'*10 + str(best_acc))
