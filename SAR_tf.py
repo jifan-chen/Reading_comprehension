@@ -11,19 +11,23 @@ from preprocessing import *
 
 
 class Trainer():
-    def __init__(self, vocab_size, embedding_size, ini_weight, hidden_dim, bidirection=False, option_number=4):
+    def __init__(self, vocab_size, embedding_size, ini_weight, hidden_dim, dropout,bidirection=False, option_number=4):
         self.option_number = option_number
         self.hidden_dim = hidden_dim
         self.vocab_size = vocab_size
+        self.dropout = dropout
         self.embedding_size = embedding_size
         self.embedding_layer = tf.get_variable("embedding", [vocab_size + 2, embedding_size], trainable=True,
                                                initializer=tf.constant_initializer(ini_weight))
         self.weight_mtx_dim = hidden_dim * 2 if bidirection else hidden_dim
         self.p2q_attention = AttentionLayer_tf.BilinearAttentionP2Q(self.weight_mtx_dim,'W_p2q')
         self.o2p_attention = AttentionLayer_tf.BilinearAttentionO2P(self.weight_mtx_dim,'W_o2p')
-        self.passage_encoder = RNN_encoder(hidden_size, 'passage_encoder', bidirection)
-        self.question_encoder = RNN_encoder(hidden_size, 'question_encoder', bidirection)
-        self.option_encoder = RNN_encoder(hidden_size, 'option_encoder', bidirection)
+        self.passage_encoder = RNN_encoder(hidden_dim, 'passage_encoder', bidirection, keep_prob=self.dropout,
+                                           reuse=tf.AUTO_REUSE)
+        self.question_encoder = RNN_encoder(hidden_dim, 'question_encoder', bidirection, keep_prob=self.dropout)
+        self.option_encoder = RNN_encoder(hidden_dim, 'option_encoder', bidirection, keep_prob=self.dropout)
+        self.gated_encoder1 = RNN_encoder(hidden_dim, 'g1_encoder', bidirection, keep_prob=self.dropout,
+                                          reuse=tf.AUTO_REUSE)
 
     def forward(self, passage, msk_p, lst_p, qst, msk_qst, lst_qst, opt, msk_opt, lst_opt):
         v_passage = tf.nn.embedding_lookup(self.embedding_layer, passage)
@@ -69,6 +73,31 @@ def gen_examples(x1, x2, x3, x4, y, batch_size, concat=False):
         all_ex.append((mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3, mb_mask3, mb_lst3, mb_y))
     return all_ex
 
+def test_model(data):
+    predicts = []
+    gold = []
+    step_idx = 0
+    loss_acc = 0
+
+    for it, (mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3,
+             mb_mask3, mb_lst3, mb_y) in enumerate(data):
+        # Evaluate on the dev set
+        train_correct = 0
+        [pred_this_instance, loss_this_batch] = sess.run([one_best, loss],
+                                                         feed_dict={article: mb_x1, msk_a: mb_mask1, lst_a: mb_lst1,
+                                                                    qst: mb_x2, msk_qst: mb_mask2, lst_qst: mb_lst2,
+                                                                    opt: mb_x3, msk_opt: mb_mask3, lst_opt: mb_lst3,
+                                                                    y: mb_y, dropout_rate: 1.0})
+
+        predicts += list(pred_this_instance)
+        gold += mb_y
+        step_idx += 1
+        loss_acc += loss_this_batch
+
+    acc = accuracy_score(gold, predicts)
+
+    return acc, (loss_acc/step_idx)
+
 
 if __name__ == '__main__':
 
@@ -78,11 +107,13 @@ if __name__ == '__main__':
     vocab_len = len(vocab.keys())
     print vocab_len
     batch_size = 32
-
+    dir_name = 'fact_questions'
+    level = 'middle'
+    logging.info('-' * 20 + dir_name + ' ' + level + '-' * 20)
     # data loaded order: doc, question, option, Qst+Opt, Answer
-    train_data = load_data('RACE/data/train/middle/')
-    dev_data = load_data('RACE/data/dev/middle')
-    test_data = load_data('RACE/data/test/middle/')
+    train_data = load_data(dir_name+'/train/')
+    dev_data = load_data(dir_name+'/dev/'+level)
+    test_data = load_data(dir_name+'/test/'+level)
 
     train_x1, train_x2, train_x3, train_x4, train_y = convert2index(train_data, vocab, sort_by_len=False)
     dev_x1, dev_x2, dev_x3, dev_x4, dev_y = convert2index(dev_data, vocab, sort_by_len=False)
@@ -95,12 +126,7 @@ if __name__ == '__main__':
 
     embedding_size = 100
     hidden_size = 128
-    #pre_embedding = load_pretrained_embedding('RACE/glove.6B/glove.6B.100d.txt')
     init_embedding = gen_embeddings(vocab,embedding_size,'RACE/glove.6B/glove.6B.100d.txt')
-    #init_embedding_matrix(vocab, pre_embedding, embedding_size)
-
-    trainer = Trainer(vocab_size=vocab_len, embedding_size=embedding_size, ini_weight=init_embedding,
-                      hidden_dim=hidden_size, bidirection=True)
 
     article = tf.placeholder(tf.int32, (None, None))
     msk_a = tf.placeholder(tf.float32, (None, None))
@@ -114,16 +140,18 @@ if __name__ == '__main__':
     msk_opt = tf.placeholder(tf.float32, (None, None))
     lst_opt = tf.placeholder(tf.int32, (None))
 
-    y = tf.placeholder(tf.int64, (None))
+    dropout_rate = tf.placeholder_with_default(0.5, shape=())
 
+    y = tf.placeholder(tf.int32, (None))
+
+    trainer = Trainer(vocab_size=vocab_len, embedding_size=embedding_size, ini_weight=init_embedding,
+                      dropout=dropout_rate, hidden_dim=hidden_size, bidirection=True)
     probs = trainer.forward(article, msk_a, lst_a, qst, msk_qst, lst_qst, opt, msk_opt, lst_opt)
 
     one_best = tf.argmax(probs, axis=1)
 
     label_onehot = tf.one_hot(y, 4)
-    acc = tf.equal(one_best,y)
-    acc = tf.cast(acc,tf.int32)
-    acc = tf.reduce_sum(acc)
+
     loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=probs, labels=label_onehot))
     # loss = tf.reduce_mean(tf.negative(tf.log(tf.reduce_sum(probs * label_onehot, axis=1))))
 
@@ -168,18 +196,20 @@ if __name__ == '__main__':
 
     with tf.Session() as sess:
         # Write a logfile to the logs/ directory, can use Tensorboard to view this
-        train_writer = tf.summary.FileWriter('logs/', sess.graph)
+        #train_writer = tf.summary.FileWriter('logs/', sess.graph)
         # Generally want to determinize training as much as possible
         saver = tf.train.Saver()
         tf.set_random_seed(2017)
         # Initialize variables
         sess.run(init)
         best_acc = 0
-
+        nupdate = 0
         for epoch in range(num_epoch):
             step_idx = 0
             loss_acc = 0
             start_time = time.time()
+            np.random.shuffle(all_train)
+
             for it, (mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3,
                      mb_mask3, mb_lst3, mb_y) in enumerate(all_train):
 
@@ -187,11 +217,12 @@ if __name__ == '__main__':
                                                          feed_dict={article: mb_x1, msk_a: mb_mask1, lst_a: mb_lst1,
                                                                     qst: mb_x2, msk_qst: mb_mask2, lst_qst: mb_lst2,
                                                                     opt: mb_x3, msk_opt: mb_mask3, lst_opt: mb_lst3,
-                                                                    y: mb_y})
+                                                                    y: mb_y,dropout_rate:0.5})
 
-                train_writer.add_summary(summary, step_idx)
                 step_idx += 1
                 loss_acc += loss_this_batch
+                nupdate += 1
+
                 if it % 100 == 0:
                     end_time = time.time()
                     elapsed = end_time - start_time
@@ -202,34 +233,18 @@ if __name__ == '__main__':
                     step_idx = 0
                     loss_acc = 0
 
-            logging.info('-' * 20 + 'testing' + '-' * 20)
-            predicts = []
-            gold = []
-            step_idx = 0
-            loss_acc = 0
-            accuracy = 0
-            num = 0
-            for it, (mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3,
-                     mb_mask3, mb_lst3, mb_y) in enumerate(all_dev):
-                # Evaluate on the dev set
-                train_correct = 0
-                [pred_this_instance,loss_this_batch,acc_this_batch] = sess.run([one_best,loss,acc], feed_dict={article: mb_x1, msk_a: mb_mask1, lst_a: mb_lst1,
-                                                                       qst: mb_x2, msk_qst: mb_mask2, lst_qst: mb_lst2,
-                                                                       opt: mb_x3, msk_opt: mb_mask3, lst_opt: mb_lst3, y:mb_y})
-                accuracy += acc_this_batch
-                num += len(mb_y)
-                predicts += list(pred_this_instance)
-                gold += mb_y
-                step_idx += 1
-                loss_acc += loss_this_batch
-
-            dev_acc = accuracy_score(gold, predicts)
-            if dev_acc > best_acc:
-                best_acc = dev_acc
-                logging.info('-' * 10 + 'Saving best model ' + '-'*10)
-                saver.save(sess,"model/best_model_sar")
-            saver.save(sess,"model/current_model_sar")
-
-            #print accuracy / float(num)
-            logging.info('-' * 10 + 'Test Loss ' + '-' * 10 + repr(loss_acc / step_idx))
-            logging.info('-' * 10 + 'Test Accuracy:' + '-' * 10 + str(accuracy_score(gold, predicts)))
+                if nupdate % 1000 == 0:
+                    logging.info('-' * 20 + 'Testing on Dev' + '-' * 20)
+                    dev_acc, dev_loss = test_model(all_dev)
+                    logging.info('-' * 10 + 'Dev Accuracy:' + '-' * 10 + str(dev_acc))
+                    logging.info('-' * 10 + 'Dev Loss ' + '-' * 10 + repr(dev_loss))
+                    if dev_acc > best_acc:
+                        best_acc = dev_acc
+                        logging.info('-' * 10 + 'Best Dev Accuracy:' + '-' * 10 + str(best_acc))
+                        # logging.info('-' * 10 + 'Saving best model ' + '-'*10)
+                        logging.info('-' * 20 + 'Testing on best model' + '-' * 20)
+                        saver.save(sess, "model/best_model")
+                        test_acc, test_loss = test_model(all_test)
+                        logging.info('-' * 10 + 'Test Accuracy:' + '-' * 10 + str(test_acc))
+                        logging.info('-' * 10 + 'Test loss:' + '-' * 10 + str(test_loss))
+                    saver.save(sess, "model/current_model")

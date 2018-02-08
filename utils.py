@@ -264,13 +264,13 @@ def load_data(in_file, max_example=None, relabeling=True):
 
         for i, q in enumerate(obj["questions"]):
             question_belong += [inf]
-            #documents += [obj["article"]]
+            documents += [obj["article"]]
             questions += [q]
             assert len(obj["options"][i]) == 4
             for j in range(4):
                 #print obj['options'][i][j]
                 #questions += [q]
-                documents += [obj["article"]]
+                #documents += [obj["article"]]
                 qs_op += [q + " " + obj['options'][i][j]]
             options += obj["options"][i]
             answers += [ord(obj["answers"][i]) - ord('A')]

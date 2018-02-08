@@ -13,11 +13,12 @@ def multihop_inference():
     pass
 
 class Trainer():
-    def __init__(self, vocab_size, embedding_size, ini_weight, hidden_dim, bidirection = False, option_number=4):
+    def __init__(self, vocab_size, embedding_size, ini_weight, hidden_dim, dropout, bidirection = False, option_number=4):
         self.option_number = option_number
         self.hidden_dim = hidden_dim
         self.vocab_size = vocab_size
         self.embedding_size = embedding_size
+        self.dropout = dropout
         self.embedding_layer = tf.get_variable("embedding", [vocab_size + 2, embedding_size], trainable=True,
                                           initializer=tf.constant_initializer(ini_weight))
         self.weight_mtx_dim = hidden_dim * 2 if bidirection else hidden_dim
@@ -30,11 +31,11 @@ class Trainer():
         self.q2opt_attention = AttentionLayer_tf.BilinearAttentionO2P(self.weight_mtx_dim,'W_q2opt')
         self.p2opt_dot = AttentionLayer_tf.BilinearDotM2M(self.weight_mtx_dim,'W_p2opt_dot')
 
-        self.passage_encoder = RNN_encoder(hidden_dim,'passage_encoder',bidirection,keep_prob=0.5,reuse=tf.AUTO_REUSE)
-        self.question_encoder = RNN_encoder(hidden_dim,'question_encoder',bidirection,keep_prob=0.5)
-        self.option_encoder = RNN_encoder(hidden_dim,'option_encoder',bidirection,keep_prob=0.5)
-        self.gated_encoder1 = RNN_encoder(hidden_dim,'g1_encoder',bidirection,keep_prob=0.5,reuse=tf.AUTO_REUSE)
-        self.gated_encoder2 = RNN_encoder(hidden_dim,'g2_encoder',bidirection,keep_prob=0.5)
+        self.passage_encoder = RNN_encoder(hidden_dim,'passage_encoder',bidirection,keep_prob=self.dropout,reuse=tf.AUTO_REUSE)
+        self.question_encoder = RNN_encoder(hidden_dim,'question_encoder',bidirection,keep_prob=self.dropout)
+        self.option_encoder = RNN_encoder(hidden_dim,'option_encoder',bidirection,keep_prob=self.dropout)
+        self.gated_encoder1 = RNN_encoder(hidden_dim,'g1_encoder',bidirection,keep_prob=self.dropout,reuse=tf.AUTO_REUSE)
+        self.gated_encoder2 = RNN_encoder(hidden_dim,'g2_encoder',bidirection,keep_prob=self.dropout)
 
         self.psg_selfatt = AttentionLayer_tf.SelfAttention(self.weight_mtx_dim,'passage')
         self.qst_selfatt = AttentionLayer_tf.SelfAttention(self.weight_mtx_dim,'question')
@@ -56,8 +57,6 @@ class Trainer():
         #qst_ht += tf.reduce_sum(encoded_question,axis=1)
         opt_ht, encoded_option = self.option_encoder.encode(v_opt, lst_opt)
         #encoded_option = self.opt_selfatt.apply_self_attention(encoded_option)
-        #opt_ht += tf.reduce_sum(encoded_option,axis=1)
-
 
         gated1 = self.gated_att1.apply_attention(encoded_option,encoded_passage,msk_opt)
         ght1,encoded_g1 = self.gated_encoder1.encode(gated1,lst_p)
@@ -107,6 +106,64 @@ class Trainer():
         o2q_align = self.p2opt_dot.score(expectation,qstopt_ht)
 
         return o2q_align
+
+def load_data(in_file, max_example=None, relabeling=True):
+
+    documents = []
+    questions = []
+    answers = []
+    options = []
+    qs_op = []
+    question_belong = []
+    num_examples = 0
+
+    def get_file(path):
+        files = []
+        for inf in os.listdir(path):
+            new_path = os.path.join(path, inf)
+            if os.path.isdir(new_path):
+                assert inf in ["middle", "high"]
+                files += get_file(new_path)
+            else:
+                if new_path.find(".DS_Store") != -1:
+                    continue
+                files += [new_path]
+        return files
+    files = get_file(in_file)
+
+    for inf in files:
+        try:
+            obj = json.load(open(inf, "r"))
+        except ValueError:
+            print inf
+            continue
+
+        for i, q in enumerate(obj["questions"]):
+            question_belong += [inf]
+            #documents += [obj["article"]]
+            questions += [q]
+            assert len(obj["options"][i]) == 4
+            for j in range(4):
+                #print obj['options'][i][j]
+                #questions += [q]
+                documents += [obj["article"]]
+                qs_op += [q + " " + obj['options'][i][j]]
+            options += obj["options"][i]
+            answers += [ord(obj["answers"][i]) - ord('A')]
+            num_examples += 1
+        if (max_example is not None) and (num_examples >= max_example):
+            break
+
+    def clean(st_list):
+        for i, st in enumerate(st_list):
+            st_list[i] = st.lower().strip()
+        return st_list
+
+    documents = clean(documents)
+    questions = clean(questions)
+    options = clean(options)
+    logging.info('#Examples: %d' % len(documents))
+    return (documents, questions, options,qs_op,answers)
 
 def convert2index(examples, word_dict,
                   sort_by_len=True, verbose=True, concat=False):
@@ -201,6 +258,31 @@ def gen_examples(x1, x2, x3, x4, y ,batch_size, concat=False):
         all_ex.append((mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3, mb_mask3, mb_lst3 ,mb_y))
     return all_ex
 
+def test_model(data):
+    predicts = []
+    gold = []
+    step_idx = 0
+    loss_acc = 0
+
+    for it, (mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3,
+             mb_mask3, mb_lst3, mb_y) in enumerate(data):
+        # Evaluate on the dev set
+        train_correct = 0
+        [pred_this_instance, loss_this_batch] = sess.run([one_best, loss],
+                                                         feed_dict={article: mb_x1, msk_a: mb_mask1, lst_a: mb_lst1,
+                                                                    qst: mb_x2, msk_qst: mb_mask2, lst_qst: mb_lst2,
+                                                                    opt: mb_x3, msk_opt: mb_mask3, lst_opt: mb_lst3,
+                                                                    y: mb_y, dropout_rate: 1.0})
+
+        predicts += list(pred_this_instance)
+        gold += mb_y
+        step_idx += 1
+        loss_acc += loss_this_batch
+
+    acc = accuracy_score(gold, predicts)
+
+    return acc, (loss_acc/step_idx)
+
 if __name__ == '__main__':
 
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -210,10 +292,13 @@ if __name__ == '__main__':
     print vocab_len
     batch_size = 32
 
+    dir_name = 'fact_questions'
+    level = 'middle'
+    logging.info('-' * 20 + dir_name + ' ' + level + '-' * 20)
     # data loaded order: doc, question, option, Qst+Opt, Answer
-    train_data= load_data('fact_questions/train/middle')
-    dev_data = load_data('fact_questions/dev/middle')
-    test_data = load_data('RACE/data/test/middle/')
+    train_data = load_data(dir_name + '/train/')
+    dev_data = load_data(dir_name + '/dev/' + level)
+    test_data = load_data(dir_name + '/test/' + level)
 
     train_x1, train_x2, train_x3, train_x4, train_y = convert2index(train_data, vocab,sort_by_len=False)
     dev_x1, dev_x2, dev_x3, dev_x4, dev_y = convert2index(dev_data, vocab,sort_by_len=False)
@@ -229,7 +314,6 @@ if __name__ == '__main__':
     #pre_embedding = load_pretrained_embedding('RACE/glove.6B/glove.6B.100d.txt')
     #init_embedding = init_embedding_matrix(vocab,pre_embedding,embedding_size)
     init_embedding = gen_embeddings(vocab, embedding_size, 'RACE/glove.6B/glove.6B.100d.txt')
-    trainer = Trainer(vocab_size=vocab_len,embedding_size=embedding_size,ini_weight=init_embedding,hidden_dim=hidden_size,bidirection=True)
 
     article = tf.placeholder(tf.int32,(None,None))
     msk_a = tf.placeholder(tf.float32,(None,None))
@@ -247,6 +331,8 @@ if __name__ == '__main__':
 
     y = tf.placeholder(tf.int32, (None))
 
+    trainer = Trainer(vocab_size=vocab_len, embedding_size=embedding_size, ini_weight=init_embedding,
+                      dropout=dropout_rate, hidden_dim=hidden_size, bidirection=True)
     probs = trainer.forward(article,msk_a,lst_a,qst,msk_qst,lst_qst,opt,msk_opt,lst_opt,dropout_rate)
     one_best = tf.argmax(probs, axis=1)
 
@@ -276,7 +362,7 @@ if __name__ == '__main__':
     learning_rate_decay_factor = 0.99
     global_step = tf.contrib.framework.get_or_create_global_step()
     # Smaller learning rates are sometimes necessary for larger networks
-    initial_learning_rate = 0.3
+    initial_learning_rate = 0.1
     # Decay the learning rate exponentially based on the number of steps.
     lr = tf.train.exponential_decay(initial_learning_rate,
                                     global_step,
@@ -307,7 +393,7 @@ if __name__ == '__main__':
 
     with tf.Session() as sess:
         # Write a logfile to the logs/ directory, can use Tensorboard to view this
-        train_writer = tf.summary.FileWriter('logs/', sess.graph)
+        # train_writer = tf.summary.FileWriter('logs/', sess.graph)
         # Generally want to determinize training as much as possible
         saver = tf.train.Saver()
         best_acc = 0
@@ -342,33 +428,17 @@ if __name__ == '__main__':
                     loss_acc = 0
 
                 if nupdate % 1000 == 0:
-                    logging.info('-' * 20 +'testing' + '-' * 20)
-                    predicts = []
-                    gold = []
-                    step_idx = 0
-                    loss_acc = 0
-
-
-                    for it, (mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3,
-                             mb_mask3, mb_lst3, mb_y) in enumerate(all_dev):
-                        # Evaluate on the dev set
-                        train_correct = 0
-                        [pred_this_instance, loss_this_batch] = sess.run([one_best, loss],
-                                                                         feed_dict={article: mb_x1, msk_a: mb_mask1,lst_a: mb_lst1,
-                                                                            qst: mb_x2, msk_qst: mb_mask2,lst_qst: mb_lst2,
-                                                                            opt: mb_x3, msk_opt: mb_mask3,lst_opt: mb_lst3, y: mb_y, dropout_rate:1.0})
-
-                        predicts += list(pred_this_instance)
-                        gold += mb_y
-                        step_idx += 1
-                        loss_acc += loss_this_batch
-
-                    dev_acc = accuracy_score(gold, predicts)
+                    logging.info('-' * 20 +'Testing on Dev' + '-' * 20)
+                    dev_acc,dev_loss = test_model(all_dev)
+                    logging.info('-' * 10 + 'Dev Accuracy:' + '-' * 10 + str(dev_acc))
+                    logging.info('-' * 10 + 'Dev Loss ' + '-' * 10 + repr(dev_loss))
                     if dev_acc > best_acc:
                         best_acc = dev_acc
-                        logging.info('-' * 10 + 'Saving best model ' + '-'*10)
+                        logging.info('-' * 10 + 'Best Dev Accuracy:' + '-' * 10 + str(best_acc))
+                        #logging.info('-' * 10 + 'Saving best model ' + '-'*10)
+                        logging.info('-' * 20 + 'Testing on best model' + '-' * 20)
                         saver.save(sess,"model/best_model")
+                        test_acc,test_loss = test_model(all_test)
+                        logging.info('-' * 10 + 'Test Accuracy:' + '-' * 10 + str(test_acc))
+                        logging.info('-' * 10 + 'Test loss:' + '-' * 10 + str(test_loss))
                     saver.save(sess,"model/current_model")
-                    logging.info('-' * 10 + 'Test Loss ' + '-' * 10 + repr(loss_acc / step_idx))
-                    logging.info('-' * 10 + 'Test Accuracy:' + '-' * 10 + str(accuracy_score(gold, predicts)))
-                    logging.info('-' * 10 + 'Best Accuracy:' + '-'*10 + str(best_acc))

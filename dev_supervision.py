@@ -17,22 +17,25 @@ def multihop_inference():
     pass
 
 class Trainer():
-    def __init__(self, vocab_size, embedding_size, ini_weight, hidden_dim, bidirection = False, option_number=4):
+    def __init__(self, vocab_size, embedding_size, ini_weight, hidden_dim, dropout ,bidirection = False,option_number=4):
         self.option_number = option_number
         self.hidden_dim = hidden_dim
         self.vocab_size = vocab_size
         self.embedding_size = embedding_size
+        self.dropout = dropout
         self.embedding_layer = tf.get_variable("embedding", [vocab_size + 2, embedding_size], trainable=True,
                                           initializer=tf.constant_initializer(ini_weight))
         self.weight_mtx_dim = hidden_dim * 2 if bidirection else hidden_dim
+        self.p2qa_attention = AttentionLayer_tf.BilinearAttentionP2QA(self.weight_mtx_dim,'W_p2qa')
+        self.p2opt_attention = AttentionLayer_tf.BilinearDotM2M(self.weight_mtx_dim, 'W_q2opt')
         self.e2opt_attention = AttentionLayer_tf.BilinearAttentionP2Q(self.weight_mtx_dim,'W_e2opt')
         self.e2opt_dot1 = AttentionLayer_tf.BilinearDotM2M(self.weight_mtx_dim,'W_e2opt_dot1')
         self.e2opt_dot2 = AttentionLayer_tf.BilinearDotM2M(self.weight_mtx_dim,'W_e2opt_dot2')
 
-        self.passage_encoder = RNN_encoder(hidden_dim,'passage_encoder',bidirection,keep_prob=0.8)
-        self.question_encoder = RNN_encoder(hidden_dim,'question_encoder',bidirection,keep_prob=0.8)
-        self.option_encoder = RNN_encoder(hidden_dim,'option_encoder',bidirection,keep_prob=0.8)
-        self.evidence_encoder = RNN_encoder(hidden_dim,'evidence_encoder',bidirection,keep_prob=0.8)
+        self.passage_encoder = RNN_encoder(hidden_dim,'passage_encoder',bidirection,keep_prob=self.dropout)
+        self.question_encoder = RNN_encoder(hidden_dim,'question_encoder',bidirection,keep_prob=self.dropout)
+        self.option_encoder = RNN_encoder(hidden_dim,'option_encoder',bidirection,keep_prob=self.dropout)
+        self.evidence_encoder = RNN_encoder(hidden_dim,'evidence_encoder',bidirection,keep_prob=self.dropout)
 
         self.psg_selfatt = AttentionLayer_tf.SelfAttention(self.weight_mtx_dim,'passage')
         self.evd_selfatt = AttentionLayer_tf.SelfAttention(self.weight_mtx_dim,'evidence')
@@ -40,73 +43,48 @@ class Trainer():
     def forward(self, passage, msk_p, lst_p, qst, msk_qst, lst_qst, opt, msk_opt, lst_opt,
                 evd, msk_evd, lst_evd, evd_score, dropout_rate):
 
-        #v_passage = tf.nn.embedding_lookup(self.embedding_layer,passage)
+        v_passage = tf.nn.embedding_lookup(self.embedding_layer,passage)
         v_qst = tf.nn.embedding_lookup(self.embedding_layer,qst)
         v_opt = tf.nn.embedding_lookup(self.embedding_layer,opt)
         v_evd = tf.nn.embedding_lookup(self.embedding_layer,evd)
 
-        #p_ht, encoded_passage = self.passage_encoder.encode(v_passage, lst_p )
+        p_ht, encoded_passage = self.passage_encoder.encode(v_passage, lst_p )
         #attended_passage = self.psg_selfatt.apply_self_attention(encoded_passage)
         qst_ht, encoded_question = self.question_encoder.encode(v_qst, lst_qst)
         #encoded_question = self.qst_selfatt.apply_self_attention(encoded_question)
         #qst_ht += tf.reduce_mean(encoded_question,axis=1)
         opt_ht, encoded_option = self.option_encoder.encode(v_opt, lst_opt)
         #encoded_option = self.opt_selfatt.apply_self_attention(encoded_option)
-        #opt_ht += tf.reduce_mean(encoded_option,axis=1)
 
-        evd_ht, encoded_evidence = self.evidence_encoder.encode(v_evd, lst_evd)
+        #evd_ht, encoded_evidence = self.evidence_encoder.encode(v_evd, lst_evd)
         #encoded_evidence = self.evd_selfatt.apply_self_attention(encoded_evidence)
-        e2opt_att = self.e2opt_attention.score(encoded_evidence,opt_ht)
-        evd_ht = tf.reduce_sum(tf.expand_dims(e2opt_att,axis=2) * encoded_evidence,axis=1)
+        #e2opt_att = self.e2opt_attention.score(encoded_evidence,opt_ht)
+        #evd_ht = tf.reduce_sum(tf.expand_dims(e2opt_att,axis=2) * encoded_evidence,axis=1)
         evd_score = tf.reshape(evd_score, [-1, self.option_number, 1])
         evd_score = evd_score / tf.expand_dims(tf.reduce_sum(evd_score, axis=1), axis=1)
         opt_ht = tf.reshape(opt_ht, [-1, self.option_number, self.weight_mtx_dim])
-        evd_ht = tf.reshape(evd_ht, [-1, self.option_number, self.weight_mtx_dim])
-        evd_ht = evd_ht * evd_score
+        #evd_ht = tf.reshape(evd_ht, [-1, self.option_number, self.weight_mtx_dim])
+        #evd_ht = evd_ht * evd_score
         qst_ht = tf.expand_dims(qst_ht, 1)
+
         qstopt_ht = opt_ht + qst_ht
 
-        probs_qstopt = self.e2opt_dot1.score(evd_ht,qstopt_ht)
-        probs_opt = self.e2opt_dot2.score(evd_ht,opt_ht)
-        return probs_qstopt + probs_opt
+        #probs_qstopt = self.e2opt_dot1.score(evd_ht,qstopt_ht)
 
-        evd_score = tf.reshape(evd_score,[-1,self.option_number,1])
-        evd_score = evd_score / tf.expand_dims(tf.reduce_sum(evd_score,axis=1),axis=1)
-        sum_evd = tf.reduce_sum(evd_ht * evd_score,axis=1)
-
-        #p2opt_align = self.p2opt_attention.score(encoded_passage, opt_ht)  # p2opt_align: batch x question_num x sentence_len
-        #p2opt_align = tf.reduce_sum(p2opt_align)
-        #p2opt_align = p2opt_align * msk_p
-
-        #p2opt_align = p2opt_align / tf.expand_dims(tf.reduce_sum(p2opt_align, axis=1), axis=1)
-
-        #popt_expectation = tf.reduce_sum(tf.expand_dims(p2opt_align, axis=2) * encoded_passage, axis=1)
-        popt_expectation = sum_evd
-        qst_ht = tf.expand_dims(qst_ht, 1)
-        qstopt_ht = opt_ht + qst_ht
-
-        probs = self.opt2p_attention.score(qstopt_ht,popt_expectation)
-        return probs
-        '''
-        #popt_expectation = tf.matmul(p2opt_align, encoded_passage)
+        #probs_opt = self.e2opt_dot2.score(evd_ht,opt_ht)
 
         msk_p = tf.expand_dims(msk_p, 1)
-        qst_ht = tf.expand_dims(qst_ht, 1)
-        qstopt_ht = opt_ht + qst_ht
-        p2qa_align = self.p2qa_attention.score(encoded_passage,qstopt_ht)  # p2qa_align: batch x question_num x sentence_len
+
+        p2qa_align = self.p2qa_attention.score(encoded_passage,
+                                               opt_ht)  # p2qa_align: batch x question_num x sentence_len
         p2qa_align = p2qa_align * msk_p
         p2qa_align = p2qa_align / tf.expand_dims(tf.reduce_sum(p2qa_align, axis=2), axis=2)
         pqa_expectation = tf.matmul(p2qa_align, encoded_passage)  # encoded_passage: batch x sentence_len x emb_dim
 
-        #expectation = pqa_expectation + popt_expectation
-        expectation = pqa_expectation
-        #expectation = popt_expectation
-        #o2p_align = self.option_dot_product.score(pqa_expectation)
-        o2q_align = self.q2opt_attention.score(expectation,tf.squeeze(qst_ht))
+        expectation = pqa_expectation * evd_score
+        o2q_align = self.p2opt_attention.score(expectation, qstopt_ht)
 
-        return o2q_align,p2opt_align
-        '''
-
+        return o2q_align
 
 def extract_evidence(psg, opts, qst_opts):
     # print opts
@@ -302,6 +280,32 @@ def gen_examples(x1, x2, x3, x4, x5, x6, y ,batch_size, concat=False):
                        mb_x5, mb_mask5, mb_lst5, mb_x6, mb_y))
     return all_ex
 
+def test_model(data):
+    predicts = []
+    gold = []
+    step_idx = 0
+    loss_acc = 0
+
+    for it, (mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3,
+             mb_mask3, mb_lst3, mb_x4, mb_mask4, mb_lst4, mb_s, mb_y) in enumerate(data):
+        # Evaluate on the dev set
+        train_correct = 0
+        [pred_this_instance, loss_this_batch] = \
+            sess.run([one_best, loss], feed_dict={article: mb_x1, msk_a: mb_mask1, lst_a: mb_lst1,
+                                                  qst: mb_x2, msk_qst: mb_mask2, lst_qst: mb_lst2,
+                                                  opt: mb_x3, msk_opt: mb_mask3, lst_opt: mb_lst3,
+                                                  evd: mb_x4, msk_evd: mb_mask4, lst_evd: mb_lst4,
+                                                  evd_score: mb_s, y: mb_y, dropout_rate: 1.0})
+
+        predicts += list(pred_this_instance)
+        gold += mb_y
+        step_idx += 1
+        loss_acc += loss_this_batch
+
+    acc = accuracy_score(gold, predicts)
+
+    return acc, (loss_acc/step_idx)
+
 if __name__ == '__main__':
 
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -311,17 +315,20 @@ if __name__ == '__main__':
     print vocab_len
     batch_size = 32
 
+    dir_name = 'fact_questions'
+    level = 'high'
+    logging.info('-' * 20 + dir_name + ' '+ level + '-' * 20)
     # data loaded order: doc, question, option, Qst+Opt, Answer
-    train_data= load_data('none_fact_questions/train/middle')
-    dev_data = load_data('none_fact_questions/test/middle')
-    #test_data = load_data('RACE/data/test/middle/')
+    train_data = load_data(dir_name + '/train/' + level )
+    dev_data = load_data(dir_name + '/dev/' + level)
+    test_data = load_data(dir_name + '/test/' + level)
 
     train_x1, train_x2, train_x3, train_x4, train_x5, train_x6, train_y = convert2index(train_data, vocab,sort_by_len=False)
     dev_x1, dev_x2, dev_x3, dev_x4, dev_x5, dev_x6, dev_y = convert2index(dev_data, vocab,sort_by_len=False)
+    test_x1, test_x2, test_x3, test_x4, test_x5, test_x6, test_y = convert2index(test_data, vocab,sort_by_len=False)
 
-    #test_x1, test_x2, test_x3, test_x4, test_x5, test_x6, test_y = convert2index(test_data, vocab,sort_by_len=False)
     all_train = gen_examples(train_x1, train_x2, train_x3, train_x4, train_x5,train_x6,train_y, 32)
-    #all_test = gen_examples(test_x1, test_x2, test_x3, test_x4, test_x5, test_x6, test_y,32)
+    all_test = gen_examples(test_x1, test_x2, test_x3, test_x4, test_x5, test_x6, test_y,32)
     all_dev = gen_examples(dev_x1, dev_x2, dev_x3, dev_x4, dev_x5, dev_x6, dev_y,32)
 
     logging.info('-'*20 +'Done' + '-'*20)
@@ -329,7 +336,6 @@ if __name__ == '__main__':
     embedding_size = 100
     hidden_size = 128
     init_embedding = gen_embeddings(vocab, embedding_size, 'RACE/glove.6B/glove.6B.100d.txt')
-    trainer = Trainer(vocab_size=vocab_len,embedding_size=embedding_size,ini_weight=init_embedding,hidden_dim=hidden_size,bidirection=True)
 
     article = tf.placeholder(tf.int32,(None,None))
     msk_a = tf.placeholder(tf.float32,(None,None))
@@ -352,6 +358,9 @@ if __name__ == '__main__':
     dropout_rate = tf.placeholder_with_default(1.0, shape=())
 
     y = tf.placeholder(tf.int32, (None))
+
+    trainer = Trainer(vocab_size=vocab_len, embedding_size=embedding_size, ini_weight=init_embedding,
+                      hidden_dim=hidden_size, dropout=dropout_rate, bidirection=True)
 
     probs = trainer.forward(article,msk_a,lst_a,qst,msk_qst,lst_qst,opt,msk_opt,
                             lst_opt,evd,msk_evd,lst_evd,evd_score,dropout_rate)
@@ -416,12 +425,12 @@ if __name__ == '__main__':
         #tf.set_random_seed(0)
         # Initialize variables
         sess.run(init)
-
+        nupdate = 0
         for epoch in range(num_epoch):
             step_idx = 0
             loss_acc = 0
             start_time = time.time()
-            np.random.shuffle(all_train)
+            #np.random.shuffle(all_train)
             for it, (mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3,
                      mb_mask3, mb_lst3, mb_x4, mb_mask4, mb_lst4, mb_s, mb_y) in enumerate(all_train):
 
@@ -434,45 +443,30 @@ if __name__ == '__main__':
 
                 step_idx += 1
                 loss_acc += loss_this_batch
-
+                nupdate += 1
                 if it % 100 == 0:
                     end_time = time.time()
                     elapsed = end_time - start_time
-                    logging.info('-' * 10 + 'Epoch ' + str(epoch) + '-' * 10 + "Average Loss batch " + repr(it) + ":" + str(round(
-                        loss_acc / step_idx, 3)) + 'Elapsed time:' + str(round(elapsed, 2)))
+                    logging.info(
+                        '-' * 10 + 'Epoch ' + str(epoch) + '-' * 10 + "Average Loss batch " + repr(it) + ":" + str(
+                            round(
+                                loss_acc / step_idx, 3)) + 'Elapsed time:' + str(round(elapsed, 2)))
                     start_time = time.time()
                     step_idx = 0
                     loss_acc = 0
 
-
-            logging.info('-' * 20 +'testing' + '-' * 20)
-            predicts = []
-            gold = []
-            step_idx = 0
-            loss_acc = 0
-
-            for it, (mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3,
-                     mb_mask3, mb_lst3, mb_x4, mb_mask4, mb_lst4, mb_s, mb_y) in enumerate(all_dev):
-                # Evaluate on the dev set
-                train_correct = 0
-                [pred_this_instance, loss_this_batch] = \
-                    sess.run([one_best, loss],feed_dict={article: mb_x1, msk_a: mb_mask1,lst_a: mb_lst1,
-                        qst: mb_x2, msk_qst: mb_mask2,lst_qst: mb_lst2,
-                        opt: mb_x3, msk_opt: mb_mask3,lst_opt: mb_lst3,
-                        evd: mb_x4, msk_evd: mb_mask4, lst_evd: mb_lst4,
-                        evd_score: mb_s,y: mb_y, dropout_rate:1.0})
-
-                predicts += list(pred_this_instance)
-                gold += mb_y
-                step_idx += 1
-                loss_acc += loss_this_batch
-
-            dev_acc = accuracy_score(gold, predicts)
-            if dev_acc > best_acc:
-                best_acc = dev_acc
-                logging.info('-' * 10 + 'Saving best model ' + '-'*10)
-                saver.save(sess,"model/best_model")
-            saver.save(sess,"model/current_model")
-            logging.info('-' * 10 + 'Test Loss ' + '-' * 10 + repr(loss_acc / step_idx))
-            logging.info('-' * 10 + 'Test Accuracy:' + '-' * 10 + str(accuracy_score(gold, predicts)))
-            logging.info('-' * 10 + 'Best Accuracy:' + '-'*10 + str(best_acc))
+                if nupdate % 1000 == 0:
+                    logging.info('-' * 20 + 'Testing on Dev' + '-' * 20)
+                    dev_acc, dev_loss = test_model(all_dev)
+                    logging.info('-' * 10 + 'Dev Accuracy:' + '-' * 10 + str(dev_acc))
+                    logging.info('-' * 10 + 'Dev Loss ' + '-' * 10 + repr(dev_loss))
+                    if dev_acc > best_acc:
+                        best_acc = dev_acc
+                        logging.info('-' * 10 + 'Best Dev Accuracy:' + '-' * 10 + str(best_acc))
+                        # logging.info('-' * 10 + 'Saving best model ' + '-'*10)
+                        logging.info('-' * 20 + 'Testing on best model' + '-' * 20)
+                        saver.save(sess, "model/best_model")
+                        test_acc, test_loss = test_model(all_test)
+                        logging.info('-' * 10 + 'Test Accuracy:' + '-' * 10 + str(test_acc))
+                        logging.info('-' * 10 + 'Test loss:' + '-' * 10 + str(test_loss))
+                    saver.save(sess, "model/current_model")
