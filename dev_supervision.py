@@ -17,12 +17,13 @@ def multihop_inference():
     pass
 
 class Trainer():
-    def __init__(self, vocab_size, embedding_size, ini_weight, hidden_dim, dropout ,bidirection = False,option_number=4):
+    def __init__(self, vocab_size, embedding_size, ini_weight, hidden_dim, dropout_rnn_in, dropout_rnn_out, bidirection = False,option_number=4):
         self.option_number = option_number
         self.hidden_dim = hidden_dim
         self.vocab_size = vocab_size
         self.embedding_size = embedding_size
-        self.dropout = dropout
+        self.dropout_rnn_in = dropout_rnn_in
+        self.dropout_rnn_out = dropout_rnn_out
         self.embedding_layer = tf.get_variable("embedding", [vocab_size + 2, embedding_size], trainable=True,
                                           initializer=tf.constant_initializer(ini_weight))
         self.weight_mtx_dim = hidden_dim * 2 if bidirection else hidden_dim
@@ -32,16 +33,23 @@ class Trainer():
         self.e2opt_dot1 = AttentionLayer_tf.BilinearDotM2M(self.weight_mtx_dim,'W_e2opt_dot1')
         self.e2opt_dot2 = AttentionLayer_tf.BilinearDotM2M(self.weight_mtx_dim,'W_e2opt_dot2')
 
-        self.passage_encoder = RNN_encoder(hidden_dim,'passage_encoder',bidirection,keep_prob=self.dropout)
-        self.question_encoder = RNN_encoder(hidden_dim,'question_encoder',bidirection,keep_prob=self.dropout)
-        self.option_encoder = RNN_encoder(hidden_dim,'option_encoder',bidirection,keep_prob=self.dropout)
-        self.evidence_encoder = RNN_encoder(hidden_dim,'evidence_encoder',bidirection,keep_prob=self.dropout)
+        self.passage_encoder = RNN_encoder(hidden_dim, 'passage_encoder', bidirection,
+                                           input_keep_prob=self.dropout_rnn_in,
+                                           output_keep_prob=self.dropout_rnn_out, reuse=tf.AUTO_REUSE)
+        self.question_encoder = RNN_encoder(hidden_dim, 'question_encoder', bidirection,
+                                            input_keep_prob=self.dropout_rnn_in,
+                                            output_keep_prob=self.dropout_rnn_out)
+        self.option_encoder = RNN_encoder(hidden_dim, 'option_encoder', bidirection,
+                                          input_keep_prob=self.dropout_rnn_in,
+                                          output_keep_prob=self.dropout_rnn_out)
+        self.evidence_encoder = RNN_encoder(hidden_dim,'evidence_encoder',bidirection,input_keep_prob=self.dropout_rnn_in,
+                                          output_keep_prob=self.dropout_rnn_out)
 
         self.psg_selfatt = AttentionLayer_tf.SelfAttention(self.weight_mtx_dim,'passage')
         self.evd_selfatt = AttentionLayer_tf.SelfAttention(self.weight_mtx_dim,'evidence')
 
     def forward(self, passage, msk_p, lst_p, qst, msk_qst, lst_qst, opt, msk_opt, lst_opt,
-                evd, msk_evd, lst_evd, evd_score, dropout_rate):
+                evd, msk_evd, lst_evd, evd_score):
 
         v_passage = tf.nn.embedding_lookup(self.embedding_layer,passage)
         v_qst = tf.nn.embedding_lookup(self.embedding_layer,qst)
@@ -295,7 +303,7 @@ def test_model(data):
                                                   qst: mb_x2, msk_qst: mb_mask2, lst_qst: mb_lst2,
                                                   opt: mb_x3, msk_opt: mb_mask3, lst_opt: mb_lst3,
                                                   evd: mb_x4, msk_evd: mb_mask4, lst_evd: mb_lst4,
-                                                  evd_score: mb_s, y: mb_y, dropout_rate: 1.0})
+                                                  evd_score: mb_s, y: mb_y, dropout_rnn_in:1.0,dropout_rnn_out:1.0})
 
         predicts += list(pred_this_instance)
         gold += mb_y
@@ -314,6 +322,8 @@ if __name__ == '__main__':
     vocab_len = len(vocab.keys())
     print vocab_len
     batch_size = 32
+    keep_prob_in = 0.5
+    keep_prob_out = 0.5
 
     dir_name = 'fact_questions'
     level = 'high'
@@ -355,15 +365,17 @@ if __name__ == '__main__':
 
     evd_score = tf.placeholder(tf.float32,(None))
 
-    dropout_rate = tf.placeholder_with_default(1.0, shape=())
+    dropout_rnn_out = tf.placeholder_with_default(0.5, shape=())
+    dropout_rnn_in = tf.placeholder_with_default(0.5, shape=())
 
     y = tf.placeholder(tf.int32, (None))
 
     trainer = Trainer(vocab_size=vocab_len, embedding_size=embedding_size, ini_weight=init_embedding,
-                      hidden_dim=hidden_size, dropout=dropout_rate, bidirection=True)
+                      dropout_rnn_in=dropout_rnn_in, dropout_rnn_out=dropout_rnn_out, hidden_dim=hidden_size,
+                      bidirection=True)
 
     probs = trainer.forward(article,msk_a,lst_a,qst,msk_qst,lst_qst,opt,msk_opt,
-                            lst_opt,evd,msk_evd,lst_evd,evd_score,dropout_rate)
+                            lst_opt,evd,msk_evd,lst_evd,evd_score)
     one_best = tf.argmax(probs, axis=1)
 
     label_onehot = tf.one_hot(y, 4)
@@ -382,7 +394,8 @@ if __name__ == '__main__':
                                     qst: all_dev[0][3], msk_qst: all_dev[0][4], lst_qst: all_dev[0][5],
                                     opt: all_dev[0][6], msk_opt: all_dev[0][7], lst_opt: all_dev[0][8],
                                     evd: all_dev[0][9], msk_evd: all_dev[0][10], lst_evd: all_dev[0][11],
-                                    evd_score:all_dev[0][12], y:all_dev[0][13], dropout_rate:0.5})
+                                    evd_score:all_dev[0][12], y:all_dev[0][13],
+                                    dropout_rnn_in:keep_prob_in,dropout_rnn_out:keep_prob_out})
     print 'debug output:',debug_output
 
     print tf.trainable_variables()
@@ -439,7 +452,7 @@ if __name__ == '__main__':
                                         qst: mb_x2, msk_qst: mb_mask2, lst_qst: mb_lst2,
                                         opt: mb_x3, msk_opt: mb_mask3, lst_opt: mb_lst3,
                                         evd: mb_x4, msk_evd: mb_mask4, lst_evd: mb_lst4,
-                                        evd_score:mb_s, y:mb_y,dropout_rate:0.5})
+                                        evd_score:mb_s, y:mb_y,dropout_rnn_in:0.5,dropout_rnn_out:0.5})
 
                 step_idx += 1
                 loss_acc += loss_this_batch

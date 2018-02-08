@@ -13,12 +13,13 @@ def multihop_inference():
     pass
 
 class Trainer():
-    def __init__(self, vocab_size, embedding_size, ini_weight, hidden_dim, dropout, bidirection = False, option_number=4):
+    def __init__(self, vocab_size, embedding_size, ini_weight, hidden_dim, dropout_rnn_in, dropout_rnn_out, bidirection = False, option_number=4):
         self.option_number = option_number
         self.hidden_dim = hidden_dim
         self.vocab_size = vocab_size
         self.embedding_size = embedding_size
-        self.dropout = dropout
+        self.dropout_rnn_in = dropout_rnn_in
+        self.dropout_rnn_out = dropout_rnn_out
         self.embedding_layer = tf.get_variable("embedding", [vocab_size + 2, embedding_size], trainable=True,
                                           initializer=tf.constant_initializer(ini_weight))
         self.weight_mtx_dim = hidden_dim * 2 if bidirection else hidden_dim
@@ -31,11 +32,17 @@ class Trainer():
         self.q2opt_attention = AttentionLayer_tf.BilinearAttentionO2P(self.weight_mtx_dim,'W_q2opt')
         self.p2opt_dot = AttentionLayer_tf.BilinearDotM2M(self.weight_mtx_dim,'W_p2opt_dot')
 
-        self.passage_encoder = RNN_encoder(hidden_dim,'passage_encoder',bidirection,keep_prob=self.dropout,reuse=tf.AUTO_REUSE)
-        self.question_encoder = RNN_encoder(hidden_dim,'question_encoder',bidirection,keep_prob=self.dropout)
-        self.option_encoder = RNN_encoder(hidden_dim,'option_encoder',bidirection,keep_prob=self.dropout)
-        self.gated_encoder1 = RNN_encoder(hidden_dim,'g1_encoder',bidirection,keep_prob=self.dropout,reuse=tf.AUTO_REUSE)
-        self.gated_encoder2 = RNN_encoder(hidden_dim,'g2_encoder',bidirection,keep_prob=self.dropout)
+        self.passage_encoder = RNN_encoder(hidden_dim, 'passage_encoder', bidirection,
+                                           input_keep_prob=self.dropout_rnn_in,
+                                           output_keep_prob=self.dropout_rnn_out, reuse=tf.AUTO_REUSE)
+        self.question_encoder = RNN_encoder(hidden_dim, 'question_encoder', bidirection,
+                                            input_keep_prob=self.dropout_rnn_in,
+                                            output_keep_prob=self.dropout_rnn_out)
+        self.option_encoder = RNN_encoder(hidden_dim, 'option_encoder', bidirection,
+                                          input_keep_prob=self.dropout_rnn_in,
+                                          output_keep_prob=self.dropout_rnn_out)
+        self.gated_encoder1 = RNN_encoder(hidden_dim,'g1_encoder',bidirection,input_keep_prob=self.dropout_rnn_in,
+                                            output_keep_prob=self.dropout_rnn_out,reuse=tf.AUTO_REUSE)
 
         self.psg_selfatt = AttentionLayer_tf.SelfAttention(self.weight_mtx_dim,'passage')
         self.qst_selfatt = AttentionLayer_tf.SelfAttention(self.weight_mtx_dim,'question')
@@ -44,7 +51,7 @@ class Trainer():
         self.gated_att1 = AttentionLayer_tf.GatedAttention(self.hidden_dim, self.weight_mtx_dim, 'gated1')
         self.gated_att2 = AttentionLayer_tf.GatedAttention(self.hidden_dim, self.weight_mtx_dim, 'gated2')
 
-    def forward(self, passage, msk_p, lst_p, qst, msk_qst, lst_qst, opt, msk_opt, lst_opt,dropout_rate):
+    def forward(self, passage, msk_p, lst_p, qst, msk_qst, lst_qst, opt, msk_opt, lst_opt):
         v_passage = tf.nn.embedding_lookup(self.embedding_layer,passage)
         v_qst = tf.nn.embedding_lookup(self.embedding_layer,qst)
         v_opt = tf.nn.embedding_lookup(self.embedding_layer,opt)
@@ -272,7 +279,7 @@ def test_model(data):
                                                          feed_dict={article: mb_x1, msk_a: mb_mask1, lst_a: mb_lst1,
                                                                     qst: mb_x2, msk_qst: mb_mask2, lst_qst: mb_lst2,
                                                                     opt: mb_x3, msk_opt: mb_mask3, lst_opt: mb_lst3,
-                                                                    y: mb_y, dropout_rate: 1.0})
+                                                                    y: mb_y, dropout_rnn_in: 1.0,dropout_rnn_out:1.0})
 
         predicts += list(pred_this_instance)
         gold += mb_y
@@ -291,7 +298,8 @@ if __name__ == '__main__':
     vocab_len = len(vocab.keys())
     print vocab_len
     batch_size = 32
-
+    keep_prob_in = 0.5
+    keep_prob_out = 0.5
     dir_name = 'fact_questions'
     level = 'middle'
     logging.info('-' * 20 + dir_name + ' ' + level + '-' * 20)
@@ -327,13 +335,16 @@ if __name__ == '__main__':
     msk_opt = tf.placeholder(tf.float32,(None,None))
     lst_opt = tf.placeholder(tf.int32,(None))
 
-    dropout_rate = tf.placeholder_with_default(1.0, shape=())
+    dropout_rnn_out = tf.placeholder_with_default(0.5, shape=())
+    dropout_rnn_in = tf.placeholder_with_default(0.5, shape=())
 
     y = tf.placeholder(tf.int32, (None))
 
     trainer = Trainer(vocab_size=vocab_len, embedding_size=embedding_size, ini_weight=init_embedding,
-                      dropout=dropout_rate, hidden_dim=hidden_size, bidirection=True)
-    probs = trainer.forward(article,msk_a,lst_a,qst,msk_qst,lst_qst,opt,msk_opt,lst_opt,dropout_rate)
+                      dropout_rnn_in=dropout_rnn_in, dropout_rnn_out=dropout_rnn_out, hidden_dim=hidden_size,
+                      bidirection=True)
+
+    probs = trainer.forward(article,msk_a,lst_a,qst,msk_qst,lst_qst,opt,msk_opt,lst_opt)
     one_best = tf.argmax(probs, axis=1)
 
     label_onehot = tf.one_hot(y, 4)
@@ -352,7 +363,7 @@ if __name__ == '__main__':
     debug_output = sess.run(probs, {article: all_test[0][0], msk_a: all_test[0][1], lst_a: all_test[0][2],
                                     qst: all_test[0][3], msk_qst: all_test[0][4], lst_qst: all_test[0][5],
                                     opt: all_test[0][6], msk_opt: all_test[0][7], lst_opt: all_test[0][8],
-                                    y:all_test[0][9],dropout_rate:0.5})
+                                    y:all_test[0][9],dropout_rnn_in:keep_prob_in,dropout_rnn_out:keep_prob_out})
     print 'debug output:',debug_output.shape
 
     print tf.trainable_variables()
@@ -413,7 +424,8 @@ if __name__ == '__main__':
                 [_,loss_this_batch] = sess.run([train_op, loss],
                                               feed_dict={article: mb_x1, msk_a: mb_mask1, lst_a: mb_lst1,
                                         qst: mb_x2, msk_qst: mb_mask2, lst_qst: mb_lst2,
-                                        opt: mb_x3, msk_opt: mb_mask3, lst_opt: mb_lst3, y:mb_y,dropout_rate:0.5})
+                                        opt: mb_x3, msk_opt: mb_mask3, lst_opt: mb_lst3, y:mb_y,dropout_rnn_in:0.5,
+                                                         dropout_rnn_out:0.5})
 
                 step_idx += 1
                 loss_acc += loss_this_batch
