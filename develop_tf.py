@@ -298,11 +298,15 @@ if __name__ == '__main__':
     vocab_len = len(vocab.keys())
     print vocab_len
     batch_size = 32
-    keep_prob_in = 0.5
+    keep_prob_in = 0.8
     keep_prob_out = 0.5
-    dir_name = 'fact_questions'
+    best_model = 'model/best_gar'
+    current_model = 'model/current_gar'
+    dir_name = 'RACE/data'
     level = 'middle'
     logging.info('-' * 20 + dir_name + ' ' + level + '-' * 20)
+    logging.info('keep_prob_in:' + str(keep_prob_in) + ' keep_prob_out:' + str(keep_prob_out)
+                 + 'best model:' + best_model + ' current model:' + current_model)
     # data loaded order: doc, question, option, Qst+Opt, Answer
     train_data = load_data(dir_name + '/train/')
     dev_data = load_data(dir_name + '/dev/' + level)
@@ -424,8 +428,8 @@ if __name__ == '__main__':
                 [_,loss_this_batch] = sess.run([train_op, loss],
                                               feed_dict={article: mb_x1, msk_a: mb_mask1, lst_a: mb_lst1,
                                         qst: mb_x2, msk_qst: mb_mask2, lst_qst: mb_lst2,
-                                        opt: mb_x3, msk_opt: mb_mask3, lst_opt: mb_lst3, y:mb_y,dropout_rnn_in:0.5,
-                                                         dropout_rnn_out:0.5})
+                                        opt: mb_x3, msk_opt: mb_mask3, lst_opt: mb_lst3,
+                                        y:mb_y,dropout_rnn_in:keep_prob_in, dropout_rnn_out:keep_prob_out})
 
                 step_idx += 1
                 loss_acc += loss_this_batch
@@ -449,8 +453,8 @@ if __name__ == '__main__':
                         logging.info('-' * 10 + 'Best Dev Accuracy:' + '-' * 10 + str(best_acc))
                         #logging.info('-' * 10 + 'Saving best model ' + '-'*10)
                         logging.info('-' * 20 + 'Testing on best model' + '-' * 20)
-                        saver.save(sess,"model/best_model")
+                        saver.save(sess,best_model)
                         test_acc,test_loss = test_model(all_test)
                         logging.info('-' * 10 + 'Test Accuracy:' + '-' * 10 + str(test_acc))
                         logging.info('-' * 10 + 'Test loss:' + '-' * 10 + str(test_loss))
-                    saver.save(sess,"model/current_model")
+                    saver.save(sess,current_model)

@@ -49,7 +49,7 @@ class Trainer():
         self.evd_selfatt = AttentionLayer_tf.SelfAttention(self.weight_mtx_dim,'evidence')
 
     def forward(self, passage, msk_p, lst_p, qst, msk_qst, lst_qst, opt, msk_opt, lst_opt,
-                evd, msk_evd, lst_evd, evd_score):
+                evd, msk_evd, lst_evd, evd_score, tao):
 
         v_passage = tf.nn.embedding_lookup(self.embedding_layer,passage)
         v_qst = tf.nn.embedding_lookup(self.embedding_layer,qst)
@@ -68,8 +68,16 @@ class Trainer():
         #encoded_evidence = self.evd_selfatt.apply_self_attention(encoded_evidence)
         #e2opt_att = self.e2opt_attention.score(encoded_evidence,opt_ht)
         #evd_ht = tf.reduce_sum(tf.expand_dims(e2opt_att,axis=2) * encoded_evidence,axis=1)
-        evd_score = tf.reshape(evd_score, [-1, self.option_number, 1])
-        evd_score = evd_score / tf.expand_dims(tf.reduce_sum(evd_score, axis=1), axis=1)
+
+        evd_score = evd_score / tao
+        evd_score = tf.nn.softmax(tf.reshape(evd_score,[-1, self.option_number]))
+        evd_score = tf.reshape(evd_score,[-1, self.option_number, 1])
+
+        #evd_score = tf.reshape(evd_score, [-1, self.option_number, 1])
+        #evd_score = evd_score / tf.expand_dims(tf.reduce_sum(evd_score, axis=1), axis=1)
+
+        #return evd_score
+
         opt_ht = tf.reshape(opt_ht, [-1, self.option_number, self.weight_mtx_dim])
         #evd_ht = tf.reshape(evd_ht, [-1, self.option_number, self.weight_mtx_dim])
         #evd_ht = evd_ht * evd_score
@@ -288,7 +296,7 @@ def gen_examples(x1, x2, x3, x4, x5, x6, y ,batch_size, concat=False):
                        mb_x5, mb_mask5, mb_lst5, mb_x6, mb_y))
     return all_ex
 
-def test_model(data):
+def test_model(data,tao_):
     predicts = []
     gold = []
     step_idx = 0
@@ -303,7 +311,8 @@ def test_model(data):
                                                   qst: mb_x2, msk_qst: mb_mask2, lst_qst: mb_lst2,
                                                   opt: mb_x3, msk_opt: mb_mask3, lst_opt: mb_lst3,
                                                   evd: mb_x4, msk_evd: mb_mask4, lst_evd: mb_lst4,
-                                                  evd_score: mb_s, y: mb_y, dropout_rnn_in:1.0,dropout_rnn_out:1.0})
+                                                  evd_score: mb_s, y: mb_y, dropout_rnn_in:1.0,
+                                                  dropout_rnn_out:1.0,tao:1.0})
 
         predicts += list(pred_this_instance)
         gold += mb_y
@@ -322,14 +331,18 @@ if __name__ == '__main__':
     vocab_len = len(vocab.keys())
     print vocab_len
     batch_size = 32
-    keep_prob_in = 0.5
+    keep_prob_in = 0.8
     keep_prob_out = 0.5
-
-    dir_name = 'fact_questions'
-    level = 'high'
+    best_model = 'model/best_spv'
+    current_model = 'model/current_spv'
+    tao_step = 0.0
+    dir_name = 'RACE/data'
+    level = 'middle'
     logging.info('-' * 20 + dir_name + ' '+ level + '-' * 20)
+    logging.info('keep_prob_in:'+str(keep_prob_in)+' keep_prob_out:'+str(keep_prob_out)
+                 + ' tao step:' + str(tao_step) + ' best model:' + best_model + ' current model:' + current_model)
     # data loaded order: doc, question, option, Qst+Opt, Answer
-    train_data = load_data(dir_name + '/train/' + level )
+    train_data = load_data(dir_name + '/train/' + level)
     dev_data = load_data(dir_name + '/dev/' + level)
     test_data = load_data(dir_name + '/test/' + level)
 
@@ -338,8 +351,9 @@ if __name__ == '__main__':
     test_x1, test_x2, test_x3, test_x4, test_x5, test_x6, test_y = convert2index(test_data, vocab,sort_by_len=False)
 
     all_train = gen_examples(train_x1, train_x2, train_x3, train_x4, train_x5,train_x6,train_y, 32)
+    all_dev = gen_examples(dev_x1, dev_x2, dev_x3, dev_x4, dev_x5, dev_x6, dev_y, 32)
     all_test = gen_examples(test_x1, test_x2, test_x3, test_x4, test_x5, test_x6, test_y,32)
-    all_dev = gen_examples(dev_x1, dev_x2, dev_x3, dev_x4, dev_x5, dev_x6, dev_y,32)
+
 
     logging.info('-'*20 +'Done' + '-'*20)
 
@@ -364,6 +378,7 @@ if __name__ == '__main__':
     lst_evd = tf.placeholder(tf.int32,(None))
 
     evd_score = tf.placeholder(tf.float32,(None))
+    tao = tf.placeholder(tf.float32,(None))
 
     dropout_rnn_out = tf.placeholder_with_default(0.5, shape=())
     dropout_rnn_in = tf.placeholder_with_default(0.5, shape=())
@@ -375,7 +390,7 @@ if __name__ == '__main__':
                       bidirection=True)
 
     probs = trainer.forward(article,msk_a,lst_a,qst,msk_qst,lst_qst,opt,msk_opt,
-                            lst_opt,evd,msk_evd,lst_evd,evd_score)
+                            lst_opt,evd,msk_evd,lst_evd,evd_score,tao)
     one_best = tf.argmax(probs, axis=1)
 
     label_onehot = tf.one_hot(y, 4)
@@ -395,13 +410,13 @@ if __name__ == '__main__':
                                     opt: all_dev[0][6], msk_opt: all_dev[0][7], lst_opt: all_dev[0][8],
                                     evd: all_dev[0][9], msk_evd: all_dev[0][10], lst_evd: all_dev[0][11],
                                     evd_score:all_dev[0][12], y:all_dev[0][13],
-                                    dropout_rnn_in:keep_prob_in,dropout_rnn_out:keep_prob_out})
+                                    dropout_rnn_in:keep_prob_in,dropout_rnn_out:keep_prob_out,tao:1.0})
     print 'debug output:',debug_output
 
     print tf.trainable_variables()
     num_epoch = 50
 
-    decay_steps = 1000
+    decay_steps = 10000
     learning_rate_decay_factor = 0.99
     global_step = tf.contrib.framework.get_or_create_global_step()
     # Smaller learning rates are sometimes necessary for larger networks
@@ -439,20 +454,23 @@ if __name__ == '__main__':
         # Initialize variables
         sess.run(init)
         nupdate = 0
+        tao_ = 1.0
         for epoch in range(num_epoch):
             step_idx = 0
             loss_acc = 0
             start_time = time.time()
-            #np.random.shuffle(all_train)
+            np.random.shuffle(all_train)
             for it, (mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3,
                      mb_mask3, mb_lst3, mb_x4, mb_mask4, mb_lst4, mb_s, mb_y) in enumerate(all_train):
 
+                #batch x question_num
                 [_,loss_this_batch] = sess.run([train_op, loss],
                                               feed_dict={article: mb_x1, msk_a: mb_mask1, lst_a: mb_lst1,
                                         qst: mb_x2, msk_qst: mb_mask2, lst_qst: mb_lst2,
                                         opt: mb_x3, msk_opt: mb_mask3, lst_opt: mb_lst3,
                                         evd: mb_x4, msk_evd: mb_mask4, lst_evd: mb_lst4,
-                                        evd_score:mb_s, y:mb_y,dropout_rnn_in:0.5,dropout_rnn_out:0.5})
+                                        evd_score:mb_s, y:mb_y,dropout_rnn_in:keep_prob_in,
+                                        dropout_rnn_out:keep_prob_out,tao:tao_})
 
                 step_idx += 1
                 loss_acc += loss_this_batch
@@ -468,9 +486,9 @@ if __name__ == '__main__':
                     step_idx = 0
                     loss_acc = 0
 
-                if nupdate % 1000 == 0:
+                if nupdate % 500 == 0:
                     logging.info('-' * 20 + 'Testing on Dev' + '-' * 20)
-                    dev_acc, dev_loss = test_model(all_dev)
+                    dev_acc, dev_loss = test_model(all_dev,tao_)
                     logging.info('-' * 10 + 'Dev Accuracy:' + '-' * 10 + str(dev_acc))
                     logging.info('-' * 10 + 'Dev Loss ' + '-' * 10 + repr(dev_loss))
                     if dev_acc > best_acc:
@@ -478,8 +496,10 @@ if __name__ == '__main__':
                         logging.info('-' * 10 + 'Best Dev Accuracy:' + '-' * 10 + str(best_acc))
                         # logging.info('-' * 10 + 'Saving best model ' + '-'*10)
                         logging.info('-' * 20 + 'Testing on best model' + '-' * 20)
-                        saver.save(sess, "model/best_model")
-                        test_acc, test_loss = test_model(all_test)
+                        saver.save(sess, best_model)
+                        test_acc, test_loss = test_model(all_test,tao_)
                         logging.info('-' * 10 + 'Test Accuracy:' + '-' * 10 + str(test_acc))
                         logging.info('-' * 10 + 'Test loss:' + '-' * 10 + str(test_loss))
-                    saver.save(sess, "model/current_model")
+                    saver.save(sess, current_model)
+
+            tao_ += tao_step

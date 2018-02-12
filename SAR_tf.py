@@ -32,6 +32,8 @@ class Trainer():
         self.gated_encoder1 = RNN_encoder(hidden_dim, 'g1_encoder', bidirection, input_keep_prob=self.dropout_rnn_in,
                                           output_keep_prob=self.dropout_rnn_out,reuse=tf.AUTO_REUSE)
 
+        self.Wa = tf.get_variable('Wa',[self.weight_mtx_dim,4],initializer=tf.contrib.layers.xavier_initializer())
+
     def forward(self, passage, msk_p, lst_p, qst, msk_qst, lst_qst, opt, msk_opt, lst_opt):
         v_passage = tf.nn.embedding_lookup(self.embedding_layer, passage)
         v_qst = tf.nn.embedding_lookup(self.embedding_layer, qst)
@@ -53,7 +55,7 @@ class Trainer():
         # print p_expectation
 
         o2p_align = self.o2p_attention.score(opt_ht,p_expectation)
-
+        #o2p_align = tf.matmul(p_expectation,self.Wa)
         return o2p_align
 
 
@@ -106,20 +108,31 @@ if __name__ == '__main__':
 
     logging.basicConfig(level=logging.INFO,format='%(asctime)s - %(levelname)s - %(message)s')
     logging.info('-' * 20 + 'loading training data and vocabulary' + '-' * 20)
-    vocab = load_vocab('RACE/dict.pkl')
-    vocab_len = len(vocab.keys())
-    print vocab_len
-    batch_size = 32
-    keep_prob_in = 0.5
-    keep_prob_out = 0.5
 
-    dir_name = 'fact_questions'
+
+    batch_size = 32
+    keep_prob_in = 0.8
+    keep_prob_out = 0.5
+    best_model = 'model/best_sar'
+    current_model = 'model/current_sar'
+    dir_name = 'cnn/test'
     level = 'middle'
     logging.info('-' * 20 + dir_name + ' ' + level + '-' * 20)
+    logging.info('keep_prob_in:' + str(keep_prob_in) + ' keep_prob_out:' + str(keep_prob_out)
+                 + 'best model:' + best_model + ' current model:' + current_model)
     # data loaded order: doc, question, option, Qst+Opt, Answer
-    train_data = load_data(dir_name+'/train/')
-    dev_data = load_data(dir_name+'/dev/'+level)
-    test_data = load_data(dir_name+'/test/'+level)
+    train_data = load_data('cnn/dev/')
+    dev_data = load_data('cnn/dev/')
+    test_data = load_data('cnn/test')
+
+    #train_data = load_data(dir_name+'/train/')
+    #dev_data = load_data(dir_name+'/dev/'+level)
+    #test_data = load_data(dir_name+'/test/'+level)
+
+    #vocab = load_vocab('RACE/dict.pkl')
+    vocab = utils.build_dict(train_data[0] + dev_data[1] + test_data[0])
+    vocab_len = len(vocab.keys())
+    print vocab_len
 
     train_x1, train_x2, train_x3, train_x4, train_y = convert2index(train_data, vocab, sort_by_len=False)
     dev_x1, dev_x2, dev_x3, dev_x4, dev_y = convert2index(dev_data, vocab, sort_by_len=False)
@@ -208,7 +221,7 @@ if __name__ == '__main__':
         #train_writer = tf.summary.FileWriter('logs/', sess.graph)
         # Generally want to determinize training as much as possible
         saver = tf.train.Saver()
-        tf.set_random_seed(2017)
+        #tf.set_random_seed(2017)
         # Initialize variables
         sess.run(init)
         best_acc = 0
@@ -253,8 +266,8 @@ if __name__ == '__main__':
                         logging.info('-' * 10 + 'Best Dev Accuracy:' + '-' * 10 + str(best_acc))
                         # logging.info('-' * 10 + 'Saving best model ' + '-'*10)
                         logging.info('-' * 20 + 'Testing on best model' + '-' * 20)
-                        saver.save(sess, "model/best_model")
+                        saver.save(sess, best_model)
                         test_acc, test_loss = test_model(all_test)
                         logging.info('-' * 10 + 'Test Accuracy:' + '-' * 10 + str(test_acc))
                         logging.info('-' * 10 + 'Test loss:' + '-' * 10 + str(test_loss))
-                    saver.save(sess, "model/current_model")
+                    saver.save(sess, current_model)

@@ -17,7 +17,7 @@ def tokenize(st):
 def seperate_by_fact():
     difficulty_set = ["middle", "high"]
     # difficulty_set = ["high"]
-    data = "none_fact_questions/"
+    data = "none_fact_questions_strict/"
     raw_data = "RACE/data/"
     cnt = 0
     avg_article_length = 0
@@ -51,12 +51,14 @@ def seperate_by_fact():
                     obj["questions"][i] = tokenize(obj["questions"][i])
                     avg_question_length += obj["questions"][i].count(" ")
                     delete = False
+                    #print ord(obj["answers"][i]) - ord('A')
                     for k in range(4):
+
                         for s in tkps:
                             score = rouge.get_scores([obj["options"][i][k]], [s])
                             rouge1 = score[0]['rouge-1']['p']
                             # print rouge1
-                            if rouge1 >= 0.9:
+                            if rouge1 >= 0.9 and k == ord(obj["answers"][i]) - ord('A'):
                                 delete = True
 
                     if delete:
