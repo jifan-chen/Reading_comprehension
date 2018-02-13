@@ -2,6 +2,7 @@ import tensorflow as tf
 import AttentionLayer_tf
 from Encoder_tf import RNN_encoder
 import time
+import argparse
 import logging
 import utils
 from sklearn.metrics import accuracy_score
@@ -325,26 +326,35 @@ def test_model(data,tao_):
 
 if __name__ == '__main__':
 
+    arg_parser = argparse.ArgumentParser()
+    arg_parser.add_argument("-train", type=str, help="path to training data")
+    arg_parser.add_argument("-dev", type=str, help="path to dev data")
+    arg_parser.add_argument("-test", type=str, help="path to test data")
+    arg_parser.add_argument("-best_model", type=str, help='path to save the best model')
+    arg_parser.add_argument("-current_model", type=str, help='path to save the current model')
+    arg_parser.add_argument("-dropout_in", type=float, help='keep probability of the embedding')
+    arg_parser.add_argument("-dropout_out", type=float, help='keep probability of the rnn output')
+
+    args = arg_parser.parse_args()
+
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-    logging.info('-'*20 + 'loading training data and vocabulary' + '-'*20)
-    vocab = load_vocab('RACE/dict.pkl')
-    vocab_len = len(vocab.keys())
-    print vocab_len
+    logging.info(args)
+    logging.info('-' * 20 + 'loading training data and vocabulary' + '-' * 20)
     batch_size = 32
-    keep_prob_in = 0.8
-    keep_prob_out = 0.5
-    best_model = 'model/best_spv'
-    current_model = 'model/current_spv'
     tao_step = 0.0
-    dir_name = 'RACE/data'
-    level = 'middle'
-    logging.info('-' * 20 + dir_name + ' '+ level + '-' * 20)
-    logging.info('keep_prob_in:'+str(keep_prob_in)+' keep_prob_out:'+str(keep_prob_out)
-                 + ' tao step:' + str(tao_step) + ' best model:' + best_model + ' current model:' + current_model)
     # data loaded order: doc, question, option, Qst+Opt, Answer
-    train_data = load_data(dir_name + '/train/' + level)
-    dev_data = load_data(dir_name + '/dev/' + level)
-    test_data = load_data(dir_name + '/test/' + level)
+    train_data = load_data(args.train)
+    dev_data = load_data(args.dev)
+    test_data = load_data(args.test)
+
+    vocab = load_vocab('RACE/dict.pkl')
+    # vocab = utils.build_dict(train_data[0] + dev_data[1] + test_data[0])
+    vocab_len = len(vocab.keys())
+    embedding_size = 100
+    hidden_size = 128
+    init_embedding = gen_embeddings(vocab, embedding_size, 'RACE/glove.6B/glove.6B.100d.txt')
+
+    print vocab_len
 
     train_x1, train_x2, train_x3, train_x4, train_x5, train_x6, train_y = convert2index(train_data, vocab,sort_by_len=False)
     dev_x1, dev_x2, dev_x3, dev_x4, dev_x5, dev_x6, dev_y = convert2index(dev_data, vocab,sort_by_len=False)
@@ -354,12 +364,7 @@ if __name__ == '__main__':
     all_dev = gen_examples(dev_x1, dev_x2, dev_x3, dev_x4, dev_x5, dev_x6, dev_y, 32)
     all_test = gen_examples(test_x1, test_x2, test_x3, test_x4, test_x5, test_x6, test_y,32)
 
-
     logging.info('-'*20 +'Done' + '-'*20)
-
-    embedding_size = 100
-    hidden_size = 128
-    init_embedding = gen_embeddings(vocab, embedding_size, 'RACE/glove.6B/glove.6B.100d.txt')
 
     article = tf.placeholder(tf.int32,(None,None))
     msk_a = tf.placeholder(tf.float32,(None,None))
@@ -410,12 +415,11 @@ if __name__ == '__main__':
                                     opt: all_dev[0][6], msk_opt: all_dev[0][7], lst_opt: all_dev[0][8],
                                     evd: all_dev[0][9], msk_evd: all_dev[0][10], lst_evd: all_dev[0][11],
                                     evd_score:all_dev[0][12], y:all_dev[0][13],
-                                    dropout_rnn_in:keep_prob_in,dropout_rnn_out:keep_prob_out,tao:1.0})
+                                    dropout_rnn_in:args.dropout_in,dropout_rnn_out:args.dropout_out,tao:1.0})
     print 'debug output:',debug_output
-
     print tf.trainable_variables()
-    num_epoch = 50
 
+    num_epoch = 50
     decay_steps = 10000
     learning_rate_decay_factor = 0.99
     global_step = tf.contrib.framework.get_or_create_global_step()
@@ -469,8 +473,8 @@ if __name__ == '__main__':
                                         qst: mb_x2, msk_qst: mb_mask2, lst_qst: mb_lst2,
                                         opt: mb_x3, msk_opt: mb_mask3, lst_opt: mb_lst3,
                                         evd: mb_x4, msk_evd: mb_mask4, lst_evd: mb_lst4,
-                                        evd_score:mb_s, y:mb_y,dropout_rnn_in:keep_prob_in,
-                                        dropout_rnn_out:keep_prob_out,tao:tao_})
+                                        evd_score:mb_s, y:mb_y,dropout_rnn_in:args.dropout_in,
+                                        dropout_rnn_out:args.dropout_out,tao:tao_})
 
                 step_idx += 1
                 loss_acc += loss_this_batch
@@ -486,7 +490,7 @@ if __name__ == '__main__':
                     step_idx = 0
                     loss_acc = 0
 
-                if nupdate % 500 == 0:
+                if nupdate % 1000 == 0:
                     logging.info('-' * 20 + 'Testing on Dev' + '-' * 20)
                     dev_acc, dev_loss = test_model(all_dev,tao_)
                     logging.info('-' * 10 + 'Dev Accuracy:' + '-' * 10 + str(dev_acc))
@@ -496,10 +500,10 @@ if __name__ == '__main__':
                         logging.info('-' * 10 + 'Best Dev Accuracy:' + '-' * 10 + str(best_acc))
                         # logging.info('-' * 10 + 'Saving best model ' + '-'*10)
                         logging.info('-' * 20 + 'Testing on best model' + '-' * 20)
-                        saver.save(sess, best_model)
+                        saver.save(sess, args.best_model)
                         test_acc, test_loss = test_model(all_test,tao_)
                         logging.info('-' * 10 + 'Test Accuracy:' + '-' * 10 + str(test_acc))
                         logging.info('-' * 10 + 'Test loss:' + '-' * 10 + str(test_loss))
-                    saver.save(sess, current_model)
+                    saver.save(sess, args.current_model)
 
             tao_ += tao_step

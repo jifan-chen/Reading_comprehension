@@ -115,7 +115,8 @@ def load_data(in_file, max_example=None, relabeling=True):
         for inf in os.listdir(path):
             new_path = os.path.join(path, inf)
             if os.path.isdir(new_path):
-                assert inf in ["middle", "high"]
+                #print inf
+                #assert inf in ["middle", "high"]
                 files += get_file(new_path)
             else:
                 if new_path.find(".DS_Store") != -1:
@@ -131,25 +132,24 @@ def load_data(in_file, max_example=None, relabeling=True):
             print inf
             continue
 
-        try:
-            for i, q in enumerate(obj["questions"]):
-                question_belong += [inf]
-                documents += [obj["article"]]
-                questions += [q]
 
-                assert len(obj["options"][i]) == 4
-                for j in range(4):
-                    #print obj['options'][i][j]
-                    #questions += [q]
-                    #documents += [obj["article"]]
-                    qs_op += [q + " " + obj['options'][i][j]]
-                options += obj["options"][i]
-                answers += [ord(obj["answers"][i]) - ord('A')]
-                num_examples += 1
-            if (max_example is not None) and (num_examples >= max_example):
-                break
-        except KeyError:
-            print obj
+        for i, q in enumerate(obj["questions"]):
+            question_belong += [inf]
+            documents += [obj["article"]]
+            questions += [q]
+
+            assert len(obj["options"][i]) == 4
+            for j in range(4):
+                #print obj['options'][i][j]
+                #questions += [q]
+                #documents += [obj["article"]]
+                qs_op += [q + " " + obj['options'][i][j]]
+            options += obj["options"][i]
+            answers += [ord(obj["answers"][i]) - ord('A')]
+            num_examples += 1
+        if (max_example is not None) and (num_examples >= max_example):
+            break
+
 
     def clean(st_list):
         for i, st in enumerate(st_list):

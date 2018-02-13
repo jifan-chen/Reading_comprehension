@@ -4,6 +4,7 @@ from Encoder_tf import RNN_encoder
 import time
 import logging
 import utils
+import argparse
 from sklearn.metrics import accuracy_score
 
 from utils import *
@@ -292,25 +293,35 @@ def test_model(data):
 
 if __name__ == '__main__':
 
+    arg_parser = argparse.ArgumentParser()
+    arg_parser.add_argument("-train", type=str, help="path to training data")
+    arg_parser.add_argument("-dev", type=str, help="path to dev data")
+    arg_parser.add_argument("-test", type=str, help="path to test data")
+    arg_parser.add_argument("-best_model", type=str, help='path to save the best model')
+    arg_parser.add_argument("-current_model", type=str, help='path to save the current model')
+    arg_parser.add_argument("-dropout_in", type=float, help='keep probability of the embedding')
+    arg_parser.add_argument("-dropout_out", type=float, help='keep probability of the rnn output')
+
+    args = arg_parser.parse_args()
+
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-    logging.info('-'*20 + 'loading training data and vocabulary' + '-'*20)
-    vocab = load_vocab('RACE/dict.pkl')
-    vocab_len = len(vocab.keys())
-    print vocab_len
+    logging.info(args)
+    logging.info('-' * 20 + 'loading training data and vocabulary' + '-' * 20)
     batch_size = 32
-    keep_prob_in = 0.8
-    keep_prob_out = 0.5
-    best_model = 'model/best_gar'
-    current_model = 'model/current_gar'
-    dir_name = 'RACE/data'
-    level = 'middle'
-    logging.info('-' * 20 + dir_name + ' ' + level + '-' * 20)
-    logging.info('keep_prob_in:' + str(keep_prob_in) + ' keep_prob_out:' + str(keep_prob_out)
-                 + 'best model:' + best_model + ' current model:' + current_model)
+
     # data loaded order: doc, question, option, Qst+Opt, Answer
-    train_data = load_data(dir_name + '/train/')
-    dev_data = load_data(dir_name + '/dev/' + level)
-    test_data = load_data(dir_name + '/test/' + level)
+    train_data = load_data(args.train)
+    dev_data = load_data(args.dev)
+    test_data = load_data(args.test)
+
+    vocab = load_vocab('RACE/dict.pkl')
+    # vocab = utils.build_dict(train_data[0] + dev_data[1] + test_data[0])
+    vocab_len = len(vocab.keys())
+    embedding_size = 100
+    hidden_size = 128
+    init_embedding = gen_embeddings(vocab, embedding_size, 'RACE/glove.6B/glove.6B.100d.txt')
+
+    print vocab_len
 
     train_x1, train_x2, train_x3, train_x4, train_y = convert2index(train_data, vocab,sort_by_len=False)
     dev_x1, dev_x2, dev_x3, dev_x4, dev_y = convert2index(dev_data, vocab,sort_by_len=False)
@@ -320,12 +331,6 @@ if __name__ == '__main__':
     all_dev = gen_examples(dev_x1, dev_x2, dev_x3, dev_x4, dev_y,32)
 
     logging.info('-'*20 +'Done' + '-'*20)
-
-    embedding_size = 100
-    hidden_size = 128
-    #pre_embedding = load_pretrained_embedding('RACE/glove.6B/glove.6B.100d.txt')
-    #init_embedding = init_embedding_matrix(vocab,pre_embedding,embedding_size)
-    init_embedding = gen_embeddings(vocab, embedding_size, 'RACE/glove.6B/glove.6B.100d.txt')
 
     article = tf.placeholder(tf.int32,(None,None))
     msk_a = tf.placeholder(tf.float32,(None,None))
@@ -367,7 +372,8 @@ if __name__ == '__main__':
     debug_output = sess.run(probs, {article: all_test[0][0], msk_a: all_test[0][1], lst_a: all_test[0][2],
                                     qst: all_test[0][3], msk_qst: all_test[0][4], lst_qst: all_test[0][5],
                                     opt: all_test[0][6], msk_opt: all_test[0][7], lst_opt: all_test[0][8],
-                                    y:all_test[0][9],dropout_rnn_in:keep_prob_in,dropout_rnn_out:keep_prob_out})
+                                    y:all_test[0][9],dropout_rnn_in:args.dropout_in,
+                                    dropout_rnn_out:args.dropout_out})
     print 'debug output:',debug_output.shape
 
     print tf.trainable_variables()
@@ -429,7 +435,8 @@ if __name__ == '__main__':
                                               feed_dict={article: mb_x1, msk_a: mb_mask1, lst_a: mb_lst1,
                                         qst: mb_x2, msk_qst: mb_mask2, lst_qst: mb_lst2,
                                         opt: mb_x3, msk_opt: mb_mask3, lst_opt: mb_lst3,
-                                        y:mb_y,dropout_rnn_in:keep_prob_in, dropout_rnn_out:keep_prob_out})
+                                        y:mb_y,dropout_rnn_in:args.dropout_in,
+                                        dropout_rnn_out:args.dropout_out})
 
                 step_idx += 1
                 loss_acc += loss_this_batch
@@ -453,8 +460,8 @@ if __name__ == '__main__':
                         logging.info('-' * 10 + 'Best Dev Accuracy:' + '-' * 10 + str(best_acc))
                         #logging.info('-' * 10 + 'Saving best model ' + '-'*10)
                         logging.info('-' * 20 + 'Testing on best model' + '-' * 20)
-                        saver.save(sess,best_model)
+                        saver.save(sess,args.best_model)
                         test_acc,test_loss = test_model(all_test)
                         logging.info('-' * 10 + 'Test Accuracy:' + '-' * 10 + str(test_acc))
                         logging.info('-' * 10 + 'Test loss:' + '-' * 10 + str(test_loss))
-                    saver.save(sess,current_model)
+                    saver.save(sess,args.current_model)
