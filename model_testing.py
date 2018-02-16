@@ -66,13 +66,13 @@ class Heuristic():
         self.dropout_rnn_in = dropout_rnn_in
         self.dropout_rnn_out = dropout_rnn_out
         self.embedding_layer = tf.get_variable("embedding", [vocab_size + 2, embedding_size], trainable=True,
-                                          initializer=tf.constant_initializer(ini_weight))
+                                               initializer=tf.constant_initializer(ini_weight))
         self.weight_mtx_dim = hidden_dim * 2 if bidirection else hidden_dim
-        self.p2qa_attention = AttentionLayer_tf.BilinearAttentionP2QA(self.weight_mtx_dim,'W_p2qa')
+        self.p2qa_attention = AttentionLayer_tf.BilinearAttentionP2QA(self.weight_mtx_dim, 'W_p2qa')
         self.p2opt_attention = AttentionLayer_tf.BilinearDotM2M(self.weight_mtx_dim, 'W_q2opt')
-        self.e2opt_attention = AttentionLayer_tf.BilinearAttentionP2Q(self.weight_mtx_dim,'W_e2opt')
-        self.e2opt_dot1 = AttentionLayer_tf.BilinearDotM2M(self.weight_mtx_dim,'W_e2opt_dot1')
-        self.e2opt_dot2 = AttentionLayer_tf.BilinearDotM2M(self.weight_mtx_dim,'W_e2opt_dot2')
+        self.e2opt_attention = AttentionLayer_tf.BilinearAttentionP2Q(self.weight_mtx_dim, 'W_e2opt')
+        self.e2opt_dot1 = AttentionLayer_tf.BilinearDotM2M(self.weight_mtx_dim, 'W_e2opt_dot1')
+        self.e2opt_dot2 = AttentionLayer_tf.BilinearDotM2M(self.weight_mtx_dim, 'W_e2opt_dot2')
 
         self.passage_encoder = RNN_encoder(hidden_dim, 'passage_encoder', bidirection,
                                            input_keep_prob=self.dropout_rnn_in,
@@ -83,8 +83,12 @@ class Heuristic():
         self.option_encoder = RNN_encoder(hidden_dim, 'option_encoder', bidirection,
                                           input_keep_prob=self.dropout_rnn_in,
                                           output_keep_prob=self.dropout_rnn_out)
-        self.evidence_encoder = RNN_encoder(hidden_dim,'evidence_encoder',bidirection,input_keep_prob=self.dropout_rnn_in,
-                                          output_keep_prob=self.dropout_rnn_out)
+        self.evidence_encoder = RNN_encoder(hidden_dim, 'evidence_encoder', bidirection,
+                                            input_keep_prob=self.dropout_rnn_in,
+                                            output_keep_prob=self.dropout_rnn_out)
+
+        self.psg_selfatt = AttentionLayer_tf.SelfAttention(self.weight_mtx_dim, 'passage')
+        self.evd_selfatt = AttentionLayer_tf.SelfAttention(self.weight_mtx_dim, 'evidence')
 
     def forward(self, passage, msk_p, lst_p, qst, msk_qst, lst_qst, opt, msk_opt, lst_opt,
                 evd, msk_evd, lst_evd, evd_score, tao):
@@ -155,10 +159,10 @@ if __name__ == '__main__':
 
     print vocab_len
 
+    test_dir = ['RACE/data/test/middle/','fact_questions/test/middle/',
+                'fact_questions_strict/test/middle','none_fact_questions/test/middle']
     if args.sar:
-        test_data = load_data(args.test)
-        test_x1, test_x2, test_x3, test_x4, test_y = convert2index(test_data, vocab, sort_by_len=False)
-        all_test = gen_examples(test_x1, test_x2, test_x3, test_x4, test_y, 32)
+
         g_sar = tf.Graph()
         with g_sar.as_default():
             article = tf.placeholder(tf.int32,(None,None))
@@ -190,29 +194,30 @@ if __name__ == '__main__':
             saver = tf.train.Saver()
 
             saver.restore(sar_session, args.sar)
-            predicts = []
-            gold = []
 
-            for it, (mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3,
-                     mb_mask3, mb_lst3, mb_y) in enumerate(all_test):
-                # Evaluate on the dev set
-                train_correct = 0
-                [pred_this_instance, probs_this_batch] = sar_session.run([sar_one_best, sar_probs],
-                                                 feed_dict={article: mb_x1, msk_a: mb_mask1,lst_a: mb_lst1,
-                                                            qst: mb_x2, msk_qst: mb_mask2,lst_qst: mb_lst2,
-                                                            opt: mb_x3, msk_opt: mb_mask3,lst_opt: mb_lst3,
-                                                            y: mb_y, dropout_rnn_in: 1.0,dropout_rnn_out: 1.0})
-                predicts += list(pred_this_instance)
-                gold += mb_y
+            for path in test_dir:
+                predicts = []
+                gold = []
+                test_data = load_data(path)
+                test_x1, test_x2, test_x3, test_x4, test_y = convert2index(test_data, vocab, sort_by_len=False)
+                all_test = gen_examples(test_x1, test_x2, test_x3, test_x4, test_y, 32)
 
-            dev_acc = accuracy_score(gold, predicts)
-            print dev_acc
+                for it, (mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3,
+                         mb_mask3, mb_lst3, mb_y) in enumerate(all_test):
+                    # Evaluate on the dev set
+                    train_correct = 0
+                    [pred_this_instance, probs_this_batch] = sar_session.run([sar_one_best, sar_probs],
+                                                     feed_dict={article: mb_x1, msk_a: mb_mask1,lst_a: mb_lst1,
+                                                                qst: mb_x2, msk_qst: mb_mask2,lst_qst: mb_lst2,
+                                                                opt: mb_x3, msk_opt: mb_mask3,lst_opt: mb_lst3,
+                                                                y: mb_y, dropout_rnn_in: 1.0,dropout_rnn_out: 1.0})
+                    predicts += list(pred_this_instance)
+                    gold += mb_y
+
+                dev_acc = accuracy_score(gold, predicts)
+                print dev_acc
 
     if args.heuristic:
-        test_data = dev_supervision.load_data(args.test)
-        test_x1, test_x2, test_x3, test_x4, test_x5, test_x6, test_y = \
-            dev_supervision.convert2index(test_data, vocab, sort_by_len=False)
-        all_test = dev_supervision.gen_examples(test_x1, test_x2, test_x3, test_x4, test_x5, test_x6, test_y, 32)
         g_heuristic = tf.Graph()
         with g_heuristic.as_default():
             article = tf.placeholder(tf.int32, (None, None))
@@ -250,22 +255,31 @@ if __name__ == '__main__':
             heu_sessioin = tf.Session()
             saver = tf.train.Saver()
             saver.restore(heu_sessioin, args.heuristic)
-            predicts = []
-            gold = []
 
-            for it, (mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3,
-                     mb_mask3, mb_lst3, mb_x4, mb_mask4, mb_lst4, mb_s, mb_y) in enumerate(all_test):
-                # Evaluate on the dev set
-                train_correct = 0
-                [pred_this_instance, probs_this_batch] = \
-                    heu_sessioin.run([heu_one_best, heu_probs], feed_dict={article: mb_x1, msk_a: mb_mask1, lst_a: mb_lst1,
-                                                          qst: mb_x2, msk_qst: mb_mask2, lst_qst: mb_lst2,
-                                                          opt: mb_x3, msk_opt: mb_mask3, lst_opt: mb_lst3,
-                                                          evd: mb_x4, msk_evd: mb_mask4, lst_evd: mb_lst4,
-                                                          evd_score: mb_s, y: mb_y, dropout_rnn_in: 1.0,
-                                                          dropout_rnn_out: 1.0, tao: 1.0})
-                predicts += list(pred_this_instance)
-                gold += mb_y
+            for path in test_dir:
 
-            dev_acc = accuracy_score(gold, predicts)
-            print dev_acc
+                predicts = []
+                gold = []
+
+                test_data = dev_supervision.load_data(path)
+                test_x1, test_x2, test_x3, test_x4, test_x5, test_x6, test_y = \
+                    dev_supervision.convert2index(test_data, vocab, sort_by_len=False)
+                all_test = dev_supervision.gen_examples(test_x1, test_x2, test_x3, test_x4, test_x5, test_x6, test_y,
+                                                        32)
+
+                for it, (mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3,
+                         mb_mask3, mb_lst3, mb_x4, mb_mask4, mb_lst4, mb_s, mb_y) in enumerate(all_test):
+                    # Evaluate on the dev set
+                    train_correct = 0
+                    [pred_this_instance, probs_this_batch] = \
+                        heu_sessioin.run([heu_one_best, heu_probs], feed_dict={article: mb_x1, msk_a: mb_mask1, lst_a: mb_lst1,
+                                                              qst: mb_x2, msk_qst: mb_mask2, lst_qst: mb_lst2,
+                                                              opt: mb_x3, msk_opt: mb_mask3, lst_opt: mb_lst3,
+                                                              evd: mb_x4, msk_evd: mb_mask4, lst_evd: mb_lst4,
+                                                              evd_score: mb_s, y: mb_y, dropout_rnn_in: 1.0,
+                                                              dropout_rnn_out: 1.0, tao: 1.0})
+                    predicts += list(pred_this_instance)
+                    gold += mb_y
+
+                dev_acc = accuracy_score(gold, predicts)
+                print dev_acc

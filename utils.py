@@ -32,7 +32,7 @@ def read_data(dir_url):
     return passages
 
 
-def convert2index(examples, word_dict,
+def convert2index(examples, word_dict, opt_num = 4,
                   sort_by_len=True, verbose=True, concat=False):
     """
         Vectorize `examples`.
@@ -40,6 +40,7 @@ def convert2index(examples, word_dict,
         in_y: label
         in_l: whether the entity label occurs in the document.
     """
+    #print examples[2][:10]
     in_x1 = []
     in_x2 = []
     in_x3 = []
@@ -60,12 +61,12 @@ def convert2index(examples, word_dict,
             in_x2 += [seq2]
             option_seq = []
             qsop_seq  = []
-            for i in range(4):
+            for i in range(opt_num):
                 if concat:
-                    op = " ".join(q_words) + ' @ ' + examples[2][i + idx * 4]
+                    op = " ".join(q_words) + ' @ ' + examples[2][i + idx * opt_num]
                 else:
-                    op = examples[2][i + idx * 4]
-                    qsop = examples[3][i + idx*4]
+                    op = examples[2][i + idx * opt_num]
+                    qsop = examples[3][i + idx * opt_num]
                 op = op.split(' ')
                 qsop = qsop.split(' ')
                 option = get_vector(op)
@@ -138,8 +139,8 @@ def load_data(in_file, max_example=None, relabeling=True):
             documents += [obj["article"]]
             questions += [q]
 
-            assert len(obj["options"][i]) == 4
-            for j in range(4):
+            #assert len(obj["options"][i]) == 4
+            for j in range(len(obj["options"][i])):
                 #print obj['options'][i][j]
                 #questions += [q]
                 #documents += [obj["article"]]

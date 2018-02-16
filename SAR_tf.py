@@ -33,7 +33,10 @@ class Trainer():
         self.gated_encoder1 = RNN_encoder(hidden_dim, 'g1_encoder', bidirection, input_keep_prob=self.dropout_rnn_in,
                                           output_keep_prob=self.dropout_rnn_out,reuse=tf.AUTO_REUSE)
 
-        self.Wa = tf.get_variable('Wa',[self.weight_mtx_dim,4],initializer=tf.contrib.layers.xavier_initializer())
+        self.Wa = tf.get_variable('Wa',[self.weight_mtx_dim,1],initializer=tf.contrib.layers.xavier_initializer())
+
+        self.p2qa_attention = AttentionLayer_tf.BilinearAttentionP2QA(self.weight_mtx_dim, 'W_p2qa')
+        self.p2opt_attention = AttentionLayer_tf.BilinearDotM2M(self.weight_mtx_dim, 'W_q2opt')
 
     def forward(self, passage, msk_p, lst_p, qst, msk_qst, lst_qst, opt, msk_opt, lst_opt):
         v_passage = tf.nn.embedding_lookup(self.embedding_layer, passage)
@@ -44,7 +47,9 @@ class Trainer():
         qst_ht, encoded_question = self.question_encoder.encode(v_qst, lst_qst)
         opt_ht, encoded_option = self.option_encoder.encode(v_opt, lst_opt)
 
-        opt_ht = tf.reshape(opt_ht, [-1, self.option_number, self.weight_mtx_dim])
+        opt_ht = tf.reshape(opt_ht, [tf.shape(p_ht)[0], -1, self.weight_mtx_dim])
+
+        # standard SAR
 
         p2q_align = self.p2q_attention.score(encoded_passage, qst_ht)  # batch x sentence_len
 
@@ -60,7 +65,7 @@ class Trainer():
         return o2p_align
 
 
-def gen_examples(x1, x2, x3, x4, y, batch_size, concat=False):
+def gen_examples(x1, x2, x3, x4, y, batch_size, opt_num, concat=False):
     """
         Divide examples into batches of size `batch_size`.
     """
@@ -69,8 +74,8 @@ def gen_examples(x1, x2, x3, x4, y, batch_size, concat=False):
     for minibatch in minibatches:
         mb_x1 = [x1[t] for t in minibatch]
         mb_x2 = [x2[t] for t in minibatch]
-        mb_x3 = [x3[t * 4 + k] for t in minibatch for k in range(4)]
-        mb_x4 = [x4[t * 4 + k] for t in minibatch for k in range(4)]
+        mb_x3 = [x3[t * opt_num + k] for t in minibatch for k in range(opt_num)]
+        mb_x4 = [x4[t * opt_num + k] for t in minibatch for k in range(opt_num)]
         mb_y = [y[t] for t in minibatch]
         mb_x1, mb_mask1, mb_lst1 = prepare_data(mb_x1)
         mb_x2, mb_mask2, mb_lst2 = prepare_data(mb_x2)
@@ -89,7 +94,7 @@ def test_model(data):
              mb_mask3, mb_lst3, mb_y) in enumerate(data):
         # Evaluate on the dev set
         train_correct = 0
-        [pred_this_instance, loss_this_batch] = sess.run([one_best, loss],
+        [pred_this_instance, loss_this_batch] = sess.run([one_best, loss_],
                                                          feed_dict={article: mb_x1, msk_a: mb_mask1, lst_a: mb_lst1,
                                                                     qst: mb_x2, msk_qst: mb_mask2, lst_qst: mb_lst2,
                                                                     opt: mb_x3, msk_opt: mb_mask3, lst_opt: mb_lst3,
@@ -122,7 +127,8 @@ if __name__ == '__main__':
     logging.info(args)
     logging.info('-' * 20 + 'loading training data and vocabulary' + '-' * 20)
     batch_size = 32
-
+    train_opt_num = 2
+    test_opt_num = 4
     # data loaded order: doc, question, option, Qst+Opt, Answer
     train_data = load_data(args.train)
     dev_data = load_data(args.dev)
@@ -137,12 +143,12 @@ if __name__ == '__main__':
 
     print vocab_len
 
-    train_x1, train_x2, train_x3, train_x4, train_y = convert2index(train_data, vocab, sort_by_len=False)
-    dev_x1, dev_x2, dev_x3, dev_x4, dev_y = convert2index(dev_data, vocab, sort_by_len=False)
-    test_x1, test_x2, test_x3, test_x4, test_y = convert2index(test_data, vocab, sort_by_len=False)
-    all_train = gen_examples(train_x1, train_x2, train_x3, train_x4, train_y, 32)
-    all_test = gen_examples(test_x1, test_x2, test_x3, test_x4, test_y, 32)
-    all_dev = gen_examples(dev_x1, dev_x2, dev_x3, dev_x4, dev_y, 32)
+    train_x1, train_x2, train_x3, train_x4, train_y = convert2index(train_data, vocab, sort_by_len=False,opt_num=2)
+    dev_x1, dev_x2, dev_x3, dev_x4, dev_y = convert2index(dev_data, vocab, sort_by_len=False,opt_num=4)
+    test_x1, test_x2, test_x3, test_x4, test_y = convert2index(test_data, vocab, sort_by_len=False,opt_num=4)
+    all_train = gen_examples(train_x1, train_x2, train_x3, train_x4, train_y, 32,opt_num=2)
+    all_test = gen_examples(test_x1, test_x2, test_x3, test_x4, test_y, 32,opt_num=4)
+    all_dev = gen_examples(dev_x1, dev_x2, dev_x3, dev_x4, dev_y, 32,opt_num=4)
 
     logging.info('-' * 20 + 'Done' + '-' * 20)
 
@@ -171,10 +177,11 @@ if __name__ == '__main__':
 
     one_best = tf.argmax(probs, axis=1)
 
-    label_onehot = tf.one_hot(y, 4)
-
+    label_onehot = tf.one_hot(y, train_opt_num)
     loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=probs, labels=label_onehot))
 
+    label_onehot_ = tf.one_hot(y,test_opt_num)
+    loss_ = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=probs, labels=label_onehot_))
     # debug informaiton
     #sess = tf.Session()
     #init = tf.global_variables_initializer()
@@ -254,7 +261,7 @@ if __name__ == '__main__':
                     step_idx = 0
                     loss_acc = 0
 
-                if nupdate % 1000 == 0:
+                if nupdate % 800 == 0:
                     logging.info('-' * 20 + 'Testing on Dev' + '-' * 20)
                     dev_acc, dev_loss = test_model(all_dev)
                     logging.info('-' * 10 + 'Dev Accuracy:' + '-' * 10 + str(dev_acc))

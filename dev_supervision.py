@@ -50,7 +50,7 @@ class Trainer():
         self.evd_selfatt = AttentionLayer_tf.SelfAttention(self.weight_mtx_dim,'evidence')
 
     def forward(self, passage, msk_p, lst_p, qst, msk_qst, lst_qst, opt, msk_opt, lst_opt,
-                evd, msk_evd, lst_evd, evd_score, tao):
+                evd, msk_evd, lst_evd, evd_score, att_msk, tao, alpha):
 
         v_passage = tf.nn.embedding_lookup(self.embedding_layer,passage)
         v_qst = tf.nn.embedding_lookup(self.embedding_layer,qst)
@@ -69,6 +69,8 @@ class Trainer():
         #encoded_evidence = self.evd_selfatt.apply_self_attention(encoded_evidence)
         #e2opt_att = self.e2opt_attention.score(encoded_evidence,opt_ht)
         #evd_ht = tf.reduce_sum(tf.expand_dims(e2opt_att,axis=2) * encoded_evidence,axis=1)
+
+        att_msk = att_msk + (1 - att_msk) * alpha
 
         evd_score = evd_score / tao
         evd_score = tf.nn.softmax(tf.reshape(evd_score,[-1, self.option_number]))
@@ -91,14 +93,18 @@ class Trainer():
         #probs_opt = self.e2opt_dot2.score(evd_ht,opt_ht)
 
         msk_p = tf.expand_dims(msk_p, 1)
-
+        #att_msk = tf.reshape(att_msk,[-1,self.option_number,tf.shape(att_msk)[1]])
         p2qa_align = self.p2qa_attention.score(encoded_passage,
                                                opt_ht)  # p2qa_align: batch x question_num x sentence_len
+        #p2qa_align = p2qa_align * att_msk
+        #p2qa_align = tf.nn.softmax(p2qa_align)
+
         p2qa_align = p2qa_align * msk_p
         p2qa_align = p2qa_align / tf.expand_dims(tf.reduce_sum(p2qa_align, axis=2), axis=2)
         pqa_expectation = tf.matmul(p2qa_align, encoded_passage)  # encoded_passage: batch x sentence_len x emb_dim
 
         expectation = pqa_expectation * evd_score
+        #expectation = pqa_expectation
         o2q_align = self.p2opt_attention.score(expectation, qstopt_ht)
 
         return o2q_align
@@ -108,6 +114,8 @@ def extract_evidence(psg, opts, qst_opts):
     tkps = tokenize.sent_tokenize(psg)
     evidences = []
     best_scores = []
+    evd_msk = []
+
     for opt, qst_opt in zip(opts, qst_opts):
         best = 0
         # print opt
@@ -124,9 +132,26 @@ def extract_evidence(psg, opts, qst_opts):
                 best = rouge_combine
         best_scores.append(best + 1e-5)
         evidences.append(e)
+    for evd in evidences:
+        m = np.zeros(len(psg.split(" ")))
+        index = psg.index(evd)
+        _psg = psg[:index]
+        _psg_list = _psg.split(" ")
+        start = len(_psg_list) - 1
+        psg_list = psg.split(" ")
+        evd_list = evd.split(" ")
+        evd_len = len(evd_list)
+
+        m[start:start+evd_len] = 1
+        evd_msk.append(m)
+        #print psg_list[start:start+evd_len]
+        #print evd
+        #print m
+
+
     # print evidences
     # print best_scores
-    return evidences, best_scores
+    return evidences, best_scores, evd_msk
 
 def load_data(in_file, max_example=None, relabeling=True):
 
@@ -138,6 +163,7 @@ def load_data(in_file, max_example=None, relabeling=True):
     question_belong = []
     evidences = []
     best_scores = []
+    evd_masks = []
     num_examples = 0
 
     def get_file(path):
@@ -173,9 +199,10 @@ def load_data(in_file, max_example=None, relabeling=True):
                 else:
                     qs_op += [q + ' ' + obj['options'][i][j]]
             options += obj["options"][i]
-            evds, scores = extract_evidence(obj['article'], obj["options"][i], qs_op[count * 4:(count + 1) * 4])
+            evds, scores, msk = extract_evidence(obj['article'], obj["options"][i], qs_op[count * 4:(count + 1) * 4])
             evidences += evds
             best_scores += scores
+            evd_masks += msk
 
             answers += [ord(obj["answers"][i]) - ord('A')]
             num_examples += 1
@@ -193,7 +220,7 @@ def load_data(in_file, max_example=None, relabeling=True):
     options = clean(options)
     evidences = clean(evidences)
     logging.info('#Examples: %d' % len(documents))
-    return (documents, questions, options,qs_op,evidences,best_scores,answers)
+    return (documents, questions, options,qs_op,evidences,best_scores,answers,evd_masks)
 
 def convert2index(examples, word_dict,
                   sort_by_len=True, verbose=True, concat=False):
@@ -209,6 +236,7 @@ def convert2index(examples, word_dict,
     in_x4 = []
     in_x5 = []
     in_x6 = examples[5]
+    in_x7 = examples[7]
     in_y = []
     def get_vector(st):
         seq = [word_dict[w] if w in word_dict else 0 for w in st]
@@ -271,9 +299,18 @@ def convert2index(examples, word_dict,
         new_in_x4 += j
         new_in_x5 += k
     #print new_in_x3
-    return in_x1, in_x2, new_in_x3, new_in_x4, new_in_x5, in_x6, in_y
+    return in_x1, in_x2, new_in_x3, new_in_x4, new_in_x5, in_x6, in_x7, in_y
 
-def gen_examples(x1, x2, x3, x4, x5, x6, y ,batch_size, concat=False):
+def prepare_att_mask(seqs):
+    lengths = [len(seq) for seq in seqs]
+    n_samples = len(seqs)
+    max_len = np.max(lengths)
+    x_mask = np.zeros((n_samples, max_len)).astype(np.float)
+    for idx, seq in enumerate(seqs):
+        x_mask[idx, :lengths[idx]] = seq
+    return x_mask
+
+def gen_examples(x1, x2, x3, x4, x5, x6, x7, y ,batch_size, concat=False):
     """
         Divide examples into batches of size `batch_size`.
     """
@@ -285,6 +322,9 @@ def gen_examples(x1, x2, x3, x4, x5, x6, y ,batch_size, concat=False):
         mb_x3 = [x3[t * 4 + k] for t in minibatch for k in range(4)]
         mb_x5 = [x5[t * 4 + k] for t in minibatch for k in range(4)]
         mb_x6 = [x6[t * 4 + k] for t in minibatch for k in range(4)]
+        mb_x7 = [x7[t * 4 + k] for t in minibatch for k in range(4)]
+
+        mb_x7 = prepare_att_mask(mb_x7)
 
         #mb_x4 = [x4[t * 4 + k] for t in minibatch for k in range(4)]
         mb_y = [y[t] for t in minibatch]
@@ -292,19 +332,20 @@ def gen_examples(x1, x2, x3, x4, x5, x6, y ,batch_size, concat=False):
         mb_x2, mb_mask2, mb_lst2 = prepare_data(mb_x2)
         mb_x3, mb_mask3, mb_lst3 = prepare_data(mb_x3)
         mb_x5, mb_mask5, mb_lst5 = prepare_data(mb_x5)
+        #print mb_x1.shape
         #mb_x4, mb_mask4, mb_lst4 = pad_sequences(mb_x4)
         all_ex.append((mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3, mb_mask3, mb_lst3,
-                       mb_x5, mb_mask5, mb_lst5, mb_x6, mb_y))
+                       mb_x5, mb_mask5, mb_lst5, mb_x6, mb_x7,mb_y))
     return all_ex
 
-def test_model(data,tao_):
+def test_model(data,tao_,alpha_):
     predicts = []
     gold = []
     step_idx = 0
     loss_acc = 0
 
     for it, (mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3,
-             mb_mask3, mb_lst3, mb_x4, mb_mask4, mb_lst4, mb_s, mb_y) in enumerate(data):
+             mb_mask3, mb_lst3, mb_x4, mb_mask4, mb_lst4, mb_s, mb_att,mb_y) in enumerate(data):
         # Evaluate on the dev set
         train_correct = 0
         [pred_this_instance, loss_this_batch] = \
@@ -312,8 +353,8 @@ def test_model(data,tao_):
                                                   qst: mb_x2, msk_qst: mb_mask2, lst_qst: mb_lst2,
                                                   opt: mb_x3, msk_opt: mb_mask3, lst_opt: mb_lst3,
                                                   evd: mb_x4, msk_evd: mb_mask4, lst_evd: mb_lst4,
-                                                  evd_score: mb_s, y: mb_y, dropout_rnn_in:1.0,
-                                                  dropout_rnn_out:1.0,tao:1.0})
+                                                  evd_score: mb_s, att_msk:mb_att,y: mb_y, dropout_rnn_in:1.0,
+                                                  dropout_rnn_out:1.0,tao:1.0,alpha:1.0})
 
         predicts += list(pred_this_instance)
         gold += mb_y
@@ -342,6 +383,7 @@ if __name__ == '__main__':
     logging.info('-' * 20 + 'loading training data and vocabulary' + '-' * 20)
     batch_size = 32
     tao_step = 0.0
+    alpha_step = 0.5
     # data loaded order: doc, question, option, Qst+Opt, Answer
     train_data = load_data(args.train)
     dev_data = load_data(args.dev)
@@ -356,13 +398,13 @@ if __name__ == '__main__':
 
     print vocab_len
 
-    train_x1, train_x2, train_x3, train_x4, train_x5, train_x6, train_y = convert2index(train_data, vocab,sort_by_len=False)
-    dev_x1, dev_x2, dev_x3, dev_x4, dev_x5, dev_x6, dev_y = convert2index(dev_data, vocab,sort_by_len=False)
-    test_x1, test_x2, test_x3, test_x4, test_x5, test_x6, test_y = convert2index(test_data, vocab,sort_by_len=False)
+    train_x1, train_x2, train_x3, train_x4, train_x5, train_x6, train_x7,train_y = convert2index(train_data, vocab,sort_by_len=False)
+    dev_x1, dev_x2, dev_x3, dev_x4, dev_x5, dev_x6, dev_x7,dev_y = convert2index(dev_data, vocab,sort_by_len=False)
+    test_x1, test_x2, test_x3, test_x4, test_x5, test_x6, test_x7,test_y = convert2index(test_data, vocab,sort_by_len=False)
 
-    all_train = gen_examples(train_x1, train_x2, train_x3, train_x4, train_x5,train_x6,train_y, 32)
-    all_dev = gen_examples(dev_x1, dev_x2, dev_x3, dev_x4, dev_x5, dev_x6, dev_y, 32)
-    all_test = gen_examples(test_x1, test_x2, test_x3, test_x4, test_x5, test_x6, test_y,32)
+    all_train = gen_examples(train_x1, train_x2, train_x3, train_x4, train_x5,train_x6,train_x7,train_y, 32)
+    all_dev = gen_examples(dev_x1, dev_x2, dev_x3, dev_x4, dev_x5, dev_x6, dev_x7, dev_y, 32)
+    all_test = gen_examples(test_x1, test_x2, test_x3, test_x4, test_x5, test_x6, test_x7,test_y,32)
 
     logging.info('-'*20 +'Done' + '-'*20)
 
@@ -383,7 +425,9 @@ if __name__ == '__main__':
     lst_evd = tf.placeholder(tf.int32,(None))
 
     evd_score = tf.placeholder(tf.float32,(None))
+    att_msk = tf.placeholder(tf.float32,(None,None))
     tao = tf.placeholder(tf.float32,(None))
+    alpha = tf.placeholder(tf.float32,(None))
 
     dropout_rnn_out = tf.placeholder_with_default(0.5, shape=())
     dropout_rnn_in = tf.placeholder_with_default(0.5, shape=())
@@ -395,7 +439,7 @@ if __name__ == '__main__':
                       bidirection=True)
 
     probs = trainer.forward(article,msk_a,lst_a,qst,msk_qst,lst_qst,opt,msk_opt,
-                            lst_opt,evd,msk_evd,lst_evd,evd_score,tao)
+                            lst_opt,evd,msk_evd,lst_evd,evd_score,att_msk,tao,alpha)
     one_best = tf.argmax(probs, axis=1)
 
     label_onehot = tf.one_hot(y, 4)
@@ -414,8 +458,8 @@ if __name__ == '__main__':
                                     qst: all_dev[0][3], msk_qst: all_dev[0][4], lst_qst: all_dev[0][5],
                                     opt: all_dev[0][6], msk_opt: all_dev[0][7], lst_opt: all_dev[0][8],
                                     evd: all_dev[0][9], msk_evd: all_dev[0][10], lst_evd: all_dev[0][11],
-                                    evd_score:all_dev[0][12], y:all_dev[0][13],
-                                    dropout_rnn_in:args.dropout_in,dropout_rnn_out:args.dropout_out,tao:1.0})
+                                    evd_score:all_dev[0][12], att_msk: all_dev[0][13],y:all_dev[0][14],
+                                    dropout_rnn_in:args.dropout_in,dropout_rnn_out:args.dropout_out,alpha:1.0,tao:1.0})
     print 'debug output:',debug_output
     print tf.trainable_variables()
 
@@ -459,22 +503,22 @@ if __name__ == '__main__':
         sess.run(init)
         nupdate = 0
         tao_ = 1.0
+        alpha_ = 0.5
         for epoch in range(num_epoch):
             step_idx = 0
             loss_acc = 0
             start_time = time.time()
             np.random.shuffle(all_train)
             for it, (mb_x1, mb_mask1, mb_lst1, mb_x2, mb_mask2, mb_lst2, mb_x3,
-                     mb_mask3, mb_lst3, mb_x4, mb_mask4, mb_lst4, mb_s, mb_y) in enumerate(all_train):
-
+                     mb_mask3, mb_lst3, mb_x4, mb_mask4, mb_lst4, mb_s, mb_att,mb_y) in enumerate(all_train):
                 #batch x question_num
                 [_,loss_this_batch] = sess.run([train_op, loss],
                                               feed_dict={article: mb_x1, msk_a: mb_mask1, lst_a: mb_lst1,
                                         qst: mb_x2, msk_qst: mb_mask2, lst_qst: mb_lst2,
                                         opt: mb_x3, msk_opt: mb_mask3, lst_opt: mb_lst3,
                                         evd: mb_x4, msk_evd: mb_mask4, lst_evd: mb_lst4,
-                                        evd_score:mb_s, y:mb_y,dropout_rnn_in:args.dropout_in,
-                                        dropout_rnn_out:args.dropout_out,tao:tao_})
+                                        evd_score:mb_s, att_msk:mb_att,y:mb_y,dropout_rnn_in:args.dropout_in,
+                                        dropout_rnn_out:args.dropout_out,tao:tao_,alpha:alpha_})
 
                 step_idx += 1
                 loss_acc += loss_this_batch
@@ -490,9 +534,9 @@ if __name__ == '__main__':
                     step_idx = 0
                     loss_acc = 0
 
-                if nupdate % 1000 == 0:
+                if nupdate % 600 == 0:
                     logging.info('-' * 20 + 'Testing on Dev' + '-' * 20)
-                    dev_acc, dev_loss = test_model(all_dev,tao_)
+                    dev_acc, dev_loss = test_model(all_dev,tao_,alpha_)
                     logging.info('-' * 10 + 'Dev Accuracy:' + '-' * 10 + str(dev_acc))
                     logging.info('-' * 10 + 'Dev Loss ' + '-' * 10 + repr(dev_loss))
                     if dev_acc > best_acc:
@@ -501,9 +545,11 @@ if __name__ == '__main__':
                         # logging.info('-' * 10 + 'Saving best model ' + '-'*10)
                         logging.info('-' * 20 + 'Testing on best model' + '-' * 20)
                         saver.save(sess, args.best_model)
-                        test_acc, test_loss = test_model(all_test,tao_)
+                        test_acc, test_loss = test_model(all_test,tao_,alpha_)
                         logging.info('-' * 10 + 'Test Accuracy:' + '-' * 10 + str(test_acc))
                         logging.info('-' * 10 + 'Test loss:' + '-' * 10 + str(test_loss))
                     saver.save(sess, args.current_model)
 
             tao_ += tao_step
+            alpha_step *= 0.5
+            alpha_ += alpha_step

@@ -1,5 +1,6 @@
 import os
 import json
+import numpy as np
 import copy
 from nltk import sent_tokenize, word_tokenize
 from rouge import Rouge
@@ -14,7 +15,7 @@ def tokenize(st):
         ans += word_tokenize(sent)
     return " ".join(ans).lower()
 
-def seperate_by_fact():
+def separate_by_fact():
     difficulty_set = ["middle", "high"]
     # difficulty_set = ["high"]
     data = "none_fact_questions_strict/"
@@ -71,7 +72,7 @@ def seperate_by_fact():
                     json.dump(new_obj, open(os.path.join(new_data_path, inf), "w"), indent=4)
             print deleted_questions
 
-def seperate_by_type():
+def separate_by_type():
     keyword_sets = ['what', 'when', 'who', 'why', 'how', 'which', 'where']
     difficulty_set = ["middle", "high"]
     # difficulty_set = ["high"]
@@ -123,6 +124,60 @@ def seperate_by_type():
                     json.dump(new_obj, open(os.path.join(new_data_path, inf), "w"), indent=4)
             print deleted_questions
 
+def separate_by_num_options():
+    difficulty_set = ["middle", "high"]
+    # difficulty_set = ["high"]
+    data = "two_opts_questions/"
+    raw_data = "RACE/data/"
+    cnt = 0
+    avg_article_length = 0
+    avg_question_length = 0
+    avg_option_length = 0
+    num_que = 0
+    for data_set in ["train"]:
+        p1 = os.path.join(data, data_set)
+        if not os.path.exists(p1):
+            os.mkdir(p1)
+        for d in difficulty_set:
+            new_data_path = os.path.join(data, data_set, d)
+            deleted_questions = 0
+            if not os.path.exists(new_data_path):
+                os.mkdir(new_data_path)
+            new_raw_data_path = os.path.join(raw_data, data_set, d)
+            for inf in os.listdir(new_raw_data_path):
+                if inf == '.DS_Store':
+                    continue
+                # print inf,new_raw_data_path
+                cnt += 1
+                obj = json.load(open(os.path.join(new_raw_data_path, inf), "r"))
+                new_obj = copy.deepcopy(obj)
+                obj["article"] = obj["article"].replace("\\newline", "\n")
+                obj["article"] = tokenize(obj["article"])
+                avg_article_length += obj["article"].count(" ")
+
+                for i in range(len(obj["questions"])):
+                    num_que += 1
+                    obj["questions"][i] = tokenize(obj["questions"][i])
+                    avg_question_length += obj["questions"][i].count(" ")
+                    gold_index = ord(obj["answers"][i]) - ord('A')
+
+                    gold_option = obj['options'][i].pop(gold_index)
+                    #print gold_option
+                    num_delete = 2
+                    new_options = []
+                    new_options.append(gold_option)
+                    for k in range(num_delete-1):
+                        new_options.append(obj["options"][i].pop())
+                    np.random.shuffle(new_options)
+                    new_obj['options'][i] = new_options
+                    new_obj['answers'][i] = chr(new_options.index(gold_option) + ord('A'))
+                    #print new_obj['options'][i]
+                    #print new_obj['answers'][i]
+                if len(new_obj['questions']):
+                    json.dump(new_obj, open(os.path.join(new_data_path, inf), "w"), indent=4)
+            print deleted_questions
+
 if __name__ == "__main__":
-    seperate_by_fact()
-    #seperate_by_type()
+    separate_by_num_options()
+    #separate_by_fact()
+    #separate_by_type()
