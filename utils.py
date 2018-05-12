@@ -53,7 +53,7 @@ def convert2index(examples, word_dict, opt_num = 4,
     for idx, (d, q, a) in enumerate(zip(examples[0], examples[1], examples[4])):
         d_words = d.split(' ')
         q_words = q.split(' ')
-        assert 0 <= a <= 3
+        #assert 0 <= a <= 3
         seq1 = get_vector(d_words)
         seq2 = get_vector(q_words)
         if (len(seq1) > 0) and (len(seq2) > 0):
@@ -141,10 +141,10 @@ def load_data(in_file, max_example=None, relabeling=True):
 
             #assert len(obj["options"][i]) == 4
             for j in range(len(obj["options"][i])):
-                #print obj['options'][i][j]
-                #questions += [q]
-                #documents += [obj["article"]]
-                qs_op += [q + " " + obj['options'][i][j]]
+                if '_' in q.split():
+                    qs_op += [q.replace('_', obj['options'][i][j])]
+                else:
+                    qs_op += [q + ' ' + obj['options'][i][j]]
             options += obj["options"][i]
             answers += [ord(obj["answers"][i]) - ord('A')]
             num_examples += 1

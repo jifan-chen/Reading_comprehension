@@ -45,8 +45,8 @@ class BilinearAttentionP2Q():
 class BilinearAttentionP2QA():
 
     def __init__(self,dim,vname):
-        self.W = tf.get_variable(vname, [dim, dim], initializer=tf.contrib.layers.xavier_initializer())
-        #self.W = tf.get_variable(vname, [dim, dim], initializer=tf.random_normal_initializer(-0.01, 0.01))
+        self.W1 = tf.get_variable(vname+'W1', [dim, dim], initializer=tf.contrib.layers.xavier_initializer())
+        self.W2 = tf.get_variable(vname+'W2', [dim, dim], initializer=tf.random_normal_initializer(-0.01, 0.01))
         self.dim = dim
 
     def score(self,source,target):
@@ -58,10 +58,11 @@ class BilinearAttentionP2QA():
         return batch x question_num x len
         '''
 
-        source = tf.transpose(source,perm=[0,2,1])
+        tmp_source = tf.tensordot(source, self.W2, [[2], [0]])
+        tmp_target = tf.tensordot(target, self.W1, [[2], [0]])
+        tmp_source = tf.transpose(tmp_source,perm=[0,2,1])
         #return source
-        tmp = tf.tensordot(target, self.W,[[2],[0]])
-        scores =  tf.matmul(tmp, source)
+        scores =  tf.matmul(tmp_target, tmp_source)
         return tf.nn.softmax(scores)
 
 class DotProductAttention():
@@ -85,7 +86,8 @@ class DotProductAttention():
 class BilinearDotM2M():
 
     def __init__(self,dim,vname):
-        self.W = tf.get_variable(vname, [dim, dim], initializer=tf.contrib.layers.xavier_initializer())
+        self.W1 = tf.get_variable(vname+'W1', [dim, dim], initializer=tf.contrib.layers.xavier_initializer())
+        self.W2 = tf.get_variable(vname+'W2', [dim, dim], initializer=tf.contrib.layers.xavier_initializer())
         self.dim = dim
 
     def score(self,s1,s2):
@@ -95,8 +97,9 @@ class BilinearDotM2M():
         W -- dim x dim
         return batch x length
         '''
-        tmp = tf.tensordot(s1,self.W,[[2],[0]])
-        score = tf.reduce_sum(tmp * s2,axis=2)
+        tmp_s1 = tf.nn.relu(tf.tensordot(s1,self.W1,[[2],[0]]))
+        tmp_s2 = tf.nn.relu(tf.tensordot(s2,self.W2,[[2],[0]]))
+        score = tf.reduce_sum(tmp_s1 * tmp_s2,axis=2)
         return score
 
 class BilinearAttentionM2M():
